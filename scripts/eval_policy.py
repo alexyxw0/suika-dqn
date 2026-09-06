@@ -39,6 +39,13 @@ def main() -> int:
     ap.add_argument("--port", type=int, default=8961)
     ap.add_argument("--epsilon", type=float, default=0.0,
                     help="random-action rate; 0 is greedy")
+    ap.add_argument("--sample-scale", type=float,
+                    help="sample from softmax(logits * scale) instead of "
+                         "taking the argmax. What a policy-gradient method "
+                         "would actually play. The cloned network was fitted "
+                         "by regression on standardised scores, so its outputs "
+                         "are values rather than logits: at scale 1 they are "
+                         "nearly uniform over the 40 columns")
     args = ap.parse_args()
 
     from tensorflow.keras.models import load_model
@@ -65,16 +72,16 @@ def main() -> int:
             score, steps = 0.0, 0
             try:
                 obs, _ = env.reset()
-                state = observation(obs, "features")
+                state = observation(obs)
                 started = time.time()
                 while steps < args.max_steps:
                     if args.epsilon and np.random.rand() < args.epsilon:
                         action = np.random.randint(args.actions)
                     else:
-                        action = int(np.argmax(q_of(model, state, "features")[0]))
+                        action = int(np.argmax(q_of(model, state)[0]))
                     obs, _r, done, trunc, info = env.step(
                         to_continuous(bins, action))
-                    state = observation(obs, "features")
+                    state = observation(obs)
                     score = info["score"]
                     steps += 1
                     if done or trunc:
@@ -112,7 +119,9 @@ def main() -> int:
 
     sd = st.stdev(scores) if len(scores) > 1 else 0.0
     se = sd / math.sqrt(len(scores))
-    print(f"\n  {args.checkpoint.name}: n={len(scores)}"
+    how = ("argmax" if not args.sample_scale
+           else f"sampled@{args.sample_scale:g}")
+    print(f"\n  {args.checkpoint.name} ({how}): n={len(scores)}"
           f"  mean {st.mean(scores):.0f} +/- {se:.0f} (se)  sd {sd:.0f}"
           f"  min {min(scores):.0f}  max {max(scores):.0f}"
           f"  mean length {st.mean(lengths):.0f}")

@@ -7,9 +7,10 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from agent import (EpsilonSchedule, ReplayBuffer, action_bins, apply_targets,
-                   browser_failures, double_td_targets, mirror_boards,
-                   standardise_rows, td_targets, terminal_reward,
-                   to_continuous)
+                   browser_failures, double_td_targets,
+                   explained_variance, gae_advantages, mirror_boards,
+                   normalise, standardise_rows, td_targets,
+                   terminal_reward, to_continuous)
 
 
 class TestActionBins:
@@ -486,3 +487,81 @@ class TestBrowserFailures:
         for mistake in (NameError("x"), AttributeError("y"), TypeError("z"),
                         KeyError("k"), ValueError("v")):
             assert not isinstance(mistake, browser_failures())
+
+
+class TestGAE:
+    """The advantage estimator. Its terminal handling is the subtle part: a
+    lost game has no future, a rollout that ran out of steps does."""
+
+    def test_lambda_one_is_the_full_discounted_return_when_values_are_zero(self):
+        got = gae_advantages([1.0, 1.0, 1.0], [0.0] * 3, [0.0] * 3, 0.0,
+                             gamma=1.0, lam=1.0)
+        assert list(got) == [3.0, 2.0, 1.0]
+
+    def test_lambda_zero_is_one_step_td(self):
+        got = gae_advantages([1.0, 1.0, 1.0], [0.0] * 3, [0.0] * 3, 0.0,
+                             gamma=1.0, lam=0.0)
+        assert list(got) == [1.0, 1.0, 1.0]
+
+    def test_a_perfect_value_function_gives_zero_advantage(self):
+        # V(s_t) = 1 + V(s_{t+1}) for a reward of 1 and no discount.
+        values = [3.0, 2.0, 1.0]
+        got = gae_advantages([1.0, 1.0, 1.0], values, [0.0] * 3, 0.0,
+                             gamma=1.0, lam=1.0)
+        assert got == pytest.approx([0.0, 0.0, 0.0], abs=1e-6)
+
+    def test_a_terminal_state_does_not_bootstrap(self):
+        # Whatever the value function says about the state after a lost game,
+        # it must not enter the advantage.
+        ends = gae_advantages([1.0], [0.0], [1.0], 999.0, gamma=0.99, lam=0.95)
+        assert ends[0] == pytest.approx(1.0)
+
+    def test_a_truncated_rollout_does_bootstrap(self):
+        # Same numbers, but the episode was still alive: last_value counts.
+        alive = gae_advantages([1.0], [0.0], [0.0], 10.0, gamma=0.99, lam=0.95)
+        assert alive[0] == pytest.approx(1.0 + 0.99 * 10.0)
+
+    def test_a_terminal_stops_credit_flowing_backwards(self):
+        # Reward after the terminal must not reach the step before it.
+        got = gae_advantages([0.0, 0.0], [0.0, 0.0], [1.0, 0.0], 0.0,
+                             gamma=1.0, lam=1.0)
+        assert got[0] == pytest.approx(0.0)
+
+    def test_returns_reconstruct_as_advantage_plus_value(self):
+        rng = np.random.default_rng(0)
+        r = rng.normal(size=8).astype(np.float32)
+        v = rng.normal(size=8).astype(np.float32)
+        d = np.zeros(8, dtype=np.float32)
+        adv = gae_advantages(r, v, d, 0.5, gamma=0.99, lam=0.95)
+        assert np.all(np.isfinite(adv + v))
+
+    def test_the_length_matches_the_rollout(self):
+        assert len(gae_advantages([0.0] * 7, [0.0] * 7, [0.0] * 7, 0.0)) == 7
+
+
+class TestExplainedVariance:
+    def test_a_perfect_prediction_is_one(self):
+        assert explained_variance([1, 2, 3], [1, 2, 3]) == pytest.approx(1.0)
+
+    def test_predicting_the_mean_is_zero(self):
+        assert explained_variance([2, 2, 2], [1, 2, 3]) == pytest.approx(0.0)
+
+    def test_worse_than_the_mean_is_negative(self):
+        assert explained_variance([3, 2, 1], [1, 2, 3]) < 0.0
+
+    def test_a_constant_target_does_not_divide_by_zero(self):
+        assert explained_variance([1, 2, 3], [5, 5, 5]) == 0.0
+
+
+class TestNormalise:
+    def test_it_centres_and_scales(self):
+        out = normalise([1.0, 2.0, 3.0, 4.0])
+        assert out.mean() == pytest.approx(0.0, abs=1e-6)
+        assert out.std() == pytest.approx(1.0, abs=1e-4)
+
+    def test_a_constant_input_does_not_blow_up(self):
+        assert np.all(np.isfinite(normalise([2.0, 2.0, 2.0])))
+
+    def test_the_ordering_survives(self):
+        raw = [3.0, 1.0, 2.0]
+        assert list(np.argsort(normalise(raw))) == list(np.argsort(raw))

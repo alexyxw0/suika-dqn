@@ -283,6 +283,59 @@ def terminal_reward(reward, done, truncated, penalty: float = 0.0,
     return (reward - (penalty if done else 0.0)) * scale, bool(done)
 
 
+def gae_advantages(rewards, values, dones, last_value, gamma=0.99, lam=0.95):
+    """Generalised advantage estimation (Schulman et al., 2016).
+
+    The advantage of an action is how much better the return was than the value
+    function expected. Estimating it from the full return is unbiased and very
+    noisy; estimating it one step at a time is the reverse. GAE interpolates
+    with `lam`, and the exponentially-weighted sum is what makes a policy
+    gradient usable at this sample budget.
+
+    `dones` marks a *terminal* state, not the end of the rollout. The
+    distinction matters: the value beyond a lost game is zero and must not be
+    bootstrapped, whereas a rollout that simply ran out of steps has to
+    bootstrap from `last_value` or the final transitions are told the game
+    ended when it did not.
+    """
+    n = len(rewards)
+    rewards = np.asarray(rewards, dtype=np.float32)
+    values = np.asarray(values, dtype=np.float32)
+    dones = np.asarray(dones, dtype=np.float32)
+    adv = np.zeros(n, dtype=np.float32)
+    running = 0.0
+    for t in range(n - 1, -1, -1):
+        next_value = last_value if t == n - 1 else values[t + 1]
+        nonterminal = 1.0 - dones[t]
+        delta = rewards[t] + gamma * next_value * nonterminal - values[t]
+        running = delta + gamma * lam * nonterminal * running
+        adv[t] = running
+    return adv
+
+
+def explained_variance(predicted, actual):
+    """How much of the return's variance the value function accounts for.
+
+    1.0 is perfect, 0.0 is no better than predicting the mean, and negative
+    means worse than that. The number to watch during PPO: if it sits near zero
+    the advantages are noise and the policy gradient is being driven by
+    nothing.
+    """
+    predicted = np.asarray(predicted, dtype=np.float64).ravel()
+    actual = np.asarray(actual, dtype=np.float64).ravel()
+    var = actual.var()
+    if var < 1e-12:
+        return 0.0
+    return float(1.0 - (actual - predicted).var() / var)
+
+
+def normalise(x, eps=1e-8):
+    """Zero mean, unit variance. Advantages are normalised per batch so the
+    step size does not depend on how large the rewards happen to be."""
+    x = np.asarray(x, dtype=np.float32)
+    return (x - x.mean()) / (x.std() + eps)
+
+
 def browser_failures():
     """Exception types meaning the browser is gone, not that the code is wrong.
 

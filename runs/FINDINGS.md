@@ -108,10 +108,33 @@ Both panels on the left tell the same story: plain TD loses ~800 points and ~60
 drops of survival within ten episodes, while the anchored run holds.
 
 With the anchor the policy holds at 2420 ± 45 over 98 near-greedy episodes,
-flat across every window — **the demonstration term is doing the work and
-Q-learning adds nothing measurable** (+61 ± 128 against cloning alone). Same
-constraint as everything else here: the environment yields ~100k steps
-overnight, enough to imitate a policy and not enough to improve on one.
+flat across every window (+61 ± 128 against cloning alone).
+
+**That null is weaker than it looks, and the reason is a scaling mistake in
+this repo.** The joint loss is `td + demo_weight * bc`, where the TD term is
+divided by the action count — deliberately, so the pure-TD path keeps the
+learning rate it was tuned with — and the demonstration term is not. The two
+also live in different units: Q is in scaled-reward units of order 5-9, the
+demonstration target is per-board standardised. Logging both terms during a
+short run gives `td 0.030-0.041` against `bc 0.411-0.576`, so `demo_weight=1.0`
+is really about **14:1 in favour of the demonstrations** and TD contributed
+roughly 7% of the loss.
+
+So the honest reading is not "reinforcement learning had its say and added
+nothing". It is that reinforcement learning barely got a vote. What *is*
+established: TD at full strength, with no anchor, destroys the policy (2449
+down to ~1730, twice, at two learning rates). The region between — TD weighted
+comparably to the demonstrations — is untested, because the knob did not mean
+what its name said. Both terms are now printed every episode.
+
+A separate hypothesis was tested and refuted. Every other failure in this
+project traces to maximising over noisy estimates, so the plateau was expected
+to be the same thing: an argmax over 40 Q-values selecting whichever action the
+network overrates. `scripts/check_value_calibration.py` measures it over 2,704
+states — bias `+0.095` on values of order 5, correlation with the realised
+return `0.892`, and an argmax gap of `1.749`, so **bias / gap = 0.05**. The
+margin the greedy policy selects on is eighteen times its systematic error. The
+Q function is well calibrated and that explanation does not apply here.
 
 ### 4. Rewarding structure helped; looking ahead did not
 

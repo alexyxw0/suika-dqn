@@ -227,7 +227,13 @@ def parse_args(argv=None):
                         "Without it, fine-tuning from cloned weights forgets "
                         "the policy it started from — see runs/FINDINGS.md")
     p.add_argument("--demo-weight", type=float, default=1.0,
-                   help="weight on the demonstration term")
+                   help="weight on the demonstration term. Not a ratio of "
+                        "equals: the TD term is divided by the action count "
+                        "and works on Q values of order 5-9, while this one is "
+                        "per-board standardised, so 1.0 measures out around "
+                        "14:1 in favour of the demonstrations. Both terms are "
+                        "printed each episode; read them before trusting a "
+                        "value here")
     p.add_argument("--value-bias", type=float,
                    help="set the dueling value head's bias before training. "
                         "Cloning standardises its targets per board, so the "
@@ -404,7 +410,10 @@ def main(argv=None) -> int:
             print(f"Episode {episode:4d}  reward {total_reward:8.1f}  "
                   f"steps {steps:4d}  eps {epsilon:.3f}  "
                   f"buffer {len(buffer):6d} ({buffer.nbytes()/1e9:.2f} GB)  "
-                  f"grads {gradient_steps}", flush=True)
+                  f"grads {gradient_steps}"
+                  + (f"  td {getattr(run_episode, 'last_losses', (0, 0))[0]:.3f}"
+                     f"  bc {getattr(run_episode, 'last_losses', (0, 0))[1]:.3f}"
+                     if args.demos else ""), flush=True)
             model.save(args.checkpoint)
 
             if args.eval_every and (episode + 1) % args.eval_every == 0:
@@ -503,6 +512,7 @@ def run_episode(env, model, target, buffer, bins, epsilon, gradient_steps,
     total_reward = 0.0
     steps = 0
     nstep = NStepBuffer(args.n_step, args.gamma)
+    loss_terms: list = []
 
     while not done and (args.max_steps is None or steps < args.max_steps):
         steps += 1
@@ -528,8 +538,11 @@ def run_episode(env, model, target, buffer, bins, epsilon, gradient_steps,
         if len(buffer) >= max(args.warmup, args.batch_size) \
                 and steps % args.train_every == 0:
             for _ in range(args.updates_per_step):
-                _train_step(model, target or model, buffer, args.batch_size,
-                            args.gamma, args.double, train_step, demo_data)
+                split = _train_step(model, target or model, buffer,
+                                    args.batch_size, args.gamma, args.double,
+                                    train_step, demo_data)
+                if split is not None:
+                    loss_terms.append(split)
                 gradient_steps += 1
                 if target is not None and gradient_steps % args.target_sync == 0:
                     target.set_weights(model.get_weights())
@@ -539,6 +552,10 @@ def run_episode(env, model, target, buffer, bins, epsilon, gradient_steps,
     for tail in nstep.flush():
         buffer.push(*tail)
 
+    if loss_terms:
+        td = sum(t for t, _ in loss_terms) / len(loss_terms)
+        bc = sum(b for _, b in loss_terms) / len(loss_terms)
+        run_episode.last_losses = (td, bc)
     return total_reward, steps, gradient_steps
 
 
@@ -569,14 +586,20 @@ def _train_step(model, target, buffer: ReplayBuffer, batch_size: int,
         train_step(state_batch,
                    np.asarray(actions, dtype=np.int32),
                    np.asarray(targets, dtype=np.float32))
+        return None
     else:
         d_grid, d_vector, d_scores = demo_data
         pick = np.random.randint(0, len(d_scores), batch_size)
-        train_step(state_batch,
-                   np.asarray(actions, dtype=np.int32),
-                   np.asarray(targets, dtype=np.float32),
-                   [d_grid[pick], d_vector[pick]],
-                   d_scores[pick])
+        # Returned rather than discarded: which of the two terms is actually
+        # driving the update is the difference between "reinforcement learning
+        # added nothing" and "reinforcement learning never got a say", and
+        # runs/FINDINGS.md could not tell those apart without this.
+        td, bc = train_step(state_batch,
+                            np.asarray(actions, dtype=np.int32),
+                            np.asarray(targets, dtype=np.float32),
+                            [d_grid[pick], d_vector[pick]],
+                            d_scores[pick])
+        return float(td), float(bc)
 
 
 if __name__ == "__main__":
