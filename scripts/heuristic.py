@@ -176,6 +176,12 @@ def main() -> int:
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--episodes", type=int, default=15)
     ap.add_argument("--actions", type=int, default=40)
+    ap.add_argument("--seed-base", type=int,
+                    help="play seeded games: episode i uses seed SEED_BASE+i. "
+                         "Two policies given the same base see identical fruit "
+                         "sequences, which turns a comparison between them into "
+                         "a paired one and removes the largest source of "
+                         "variance in this game")
     ap.add_argument("--max-steps", type=int, default=300)
     ap.add_argument("--port", type=int, default=8988)
     ap.add_argument("--random", action="store_true",
@@ -212,7 +218,8 @@ def main() -> int:
         while ep < args.episodes:
             score, steps = 0.0, 0
             try:
-                env.reset()
+                env.reset(seed=None if args.seed_base is None
+                          else args.seed_base + ep)
                 started = time.time()
                 while steps < args.max_steps:
                     if args.random:
@@ -262,6 +269,7 @@ def main() -> int:
         return 1
 
     label = "random" if args.random else args.policy
+    label += f" ({args.actions} actions)"
     sd = statistics.stdev(scores) if len(scores) > 1 else 0.0
     se = sd / math.sqrt(len(scores)) if scores else 0.0
     print(f"\n  {label}: n={len(scores)}  mean {statistics.mean(scores):.0f}"

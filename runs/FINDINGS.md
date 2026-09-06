@@ -158,6 +158,42 @@ iteration finally optimised the right thing and returned +38 ± 116. Three
 optimiser designs all landing at or below the hand-guessed weights is the
 evidence that the policy class, not the optimiser, is the constraint.
 
+### 6. A finer action space does not help, and seeding pays less than expected
+
+The drop position is discretised into 40 bins. Raising that to 200 was measured
+against 40 on identical fruit sequences, with the order of the two arms
+alternated across rounds:
+
+| | mean | se | n |
+|---|---|---|---|
+| 200 actions | 2551 | 143 | 12 |
+| 40 actions | 2660 | 162 | 12 |
+
+Paired difference **-109 ± 261**, and 200 won 5 of the 12 games. No improvement,
+at five times the candidate scoring per move. Forty bins already place a fruit
+every 16.4 px, well inside the smallest fruit's 24 px radius, and the landing
+estimate ignores roll and secondary settling — error larger than the 3.2 px that
+200 bins buys. Resolution finer than the physics is noise.
+
+A first attempt ran the two arms sequentially and reported 200 ahead by
++306. That was an ordering artifact: its 40-action arm came in 2.9σ below the
+same policy's 62-episode value, and re-running with the order alternated
+reversed the sign. Sequential arms confound the comparison with anything that
+drifts over a session.
+
+**Seeding helped less than claimed.** `reset(seed=)` fixes the fruit sequence,
+and the expectation was that scoring two policies on the same sequences would
+cancel the luck. It does not, for policies that differ much: they choose
+different columns from the first drop, so the same fruits arrive into
+completely different boards. Measured here, the paired difference had a
+standard deviation of 905 against 748 for an unpaired one — pairing made it
+*worse*. Common random numbers pay when the compared policies stay close to
+each other, which two different action-space sizes do not.
+
+Seeding is still worth having — it makes a single policy's episode
+reproducible, which is what `scripts/check_seeding.py` verifies — but it is not
+the variance cure it was introduced as.
+
 ## What would plausibly move it
 
 The heuristic never simulates — it estimates where a fruit lands and never
