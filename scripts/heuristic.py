@@ -1,0 +1,283 @@
+#!/usr/bin/env python3
+"""A hand-written policy, to find out what "good" looks like on this game.
+
+Not a learned agent and not a tree search — it reads the exact fruit positions
+out of the physics engine, estimates where each of the 40 candidate drops would
+land, scores the outcome, and takes the best. No rollout, so it is one ply of
+*estimation* rather than simulation.
+
+Why it exists. Training gave a policy indistinguishable from random (+66 over a
+random baseline of 1424, against a standard error of 108). That result was
+uninterpretable on its own, because there was no ceiling to compare it to: a
+game where hand-coded domain knowledge scores 3000 is one the agent is failing
+at, and a game where it scores 1600 is mostly luck. This measured which — and
+the answer, at 2497 for `greedy` and 2696 for `layered`, is that the game is
+learnable and the agent was the problem. See runs/FINDINGS.md.
+
+Run: python scripts/heuristic.py --episodes 15
+"""
+
+from __future__ import annotations
+
+import argparse
+import math
+import statistics
+import sys
+import time
+
+import numpy as np
+
+sys.path.insert(0, str(__import__('pathlib').Path(__file__).resolve().parent.parent))
+
+FLOOR_Y = 912          # top of the floor body
+BOARD_W = 640
+N_SIZES = 11
+# Game.fruitSizes radii and score values, read from the game.
+RADII = [24, 32, 40, 56, 64, 72, 84, 96, 128, 160, 192]
+SCORES = [1, 3, 6, 10, 15, 21, 28, 36, 45, 55, 66]
+# Named policies. `greedy` is the one measured in runs/FINDINGS.md;
+# `layered` adds the stacking terms. Lookahead is a separate switch, so
+# the four combinations are all reachable.
+POLICIES = {
+    "greedy": dict(merge=250.0, chain=60.0, low=200.0, bury=-8.0,
+                   stack=0.0, trap=0.0),
+    "layered": dict(merge=250.0, chain=60.0, low=200.0, bury=-8.0,
+                    stack=25.0, trap=-20.0),
+}
+WEIGHT_NAMES = ("merge", "chain", "low", "bury", "stack", "trap")
+
+# Reading the board is one script call; doing it per candidate would be 40.
+READ_STATE = """
+  const fruits = Composite.allBodies(engine.world)
+    .filter(b => !b.isStatic && b.circleRadius && b.sizeIndex !== undefined)
+    .map(b => [b.position.x, b.position.y, b.circleRadius, b.sizeIndex]);
+  return {fruits, cur: Game.currentFruitSize, next: Game.nextFruitSize,
+          score: Game.score, status: Game.stateIndex};
+"""
+
+
+def landing_y(x, r, fruits):
+    """Where a fruit of radius r dropped at x comes to rest.
+
+    It falls from the top, so it stops at the first thing it meets — the
+    smallest y among the floor and every fruit whose horizontal span it
+    overlaps.
+    """
+    best = FLOOR_Y - r
+    for fx, fy, fr, _ in fruits:
+        dx = abs(fx - x)
+        reach = fr + r
+        if dx >= reach:
+            continue
+        # Contact when the centres are `reach` apart.
+        best = min(best, fy - math.sqrt(reach * reach - dx * dx))
+    return best
+
+
+def contacts(x, y, r, fruits, slack=6.0):
+    """Fruits touching a fruit of radius r resting at (x, y)."""
+    out = []
+    for fx, fy, fr, size in fruits:
+        d = math.hypot(fx - x, fy - y)
+        if d <= fr + r + slack:
+            out.append((fx, fy, fr, size))
+    return out
+
+
+def score_candidate(x, cur, fruits, weights):
+    """How good dropping the current fruit at x looks."""
+    r = RADII[cur]
+    # A drop is clamped to the walls, so candidates outside are the same as the
+    # edge — scoring them as if they landed mid-air would be wrong.
+    x = min(max(x, r), BOARD_W - r)
+    y = landing_y(x, r, fruits)
+    touching = contacts(x, y, r, fruits)
+
+    value = 0.0
+
+    # A merge is the whole point of the game.
+    same = [t for t in touching if t[3] == cur]
+    if same:
+        value += weights["merge"] * SCORES[cur]
+        # And if the merge product would itself touch its own size, that is a
+        # chain — worth far more than one merge.
+        if cur + 1 < N_SIZES:
+            grown = RADII[cur + 1]
+            for fx, fy, fr, size in contacts(x, y, grown, fruits):
+                if size == cur + 1:
+                    value += weights["chain"] * SCORES[cur + 1]
+                    break
+
+    # Keeping the pile low is how you survive, and survival is how you score.
+    value += weights["low"] * (y / FLOOR_Y)
+
+    # Dropping a big fruit onto much smaller ones buries them where they can
+    # never meet a partner.
+    for _, _, _, size in touching:
+        if size < cur - 1:
+            value += weights["bury"] * (cur - size)
+
+    # Small resting on big is the structure that works. The small fruit stays
+    # on the surface where a partner can still reach it, and the big one is
+    # already where it belongs — nothing has to move it later.
+    w_stack = weights.get("stack", 0.0)
+    if w_stack:
+        for _, _, _, size in touching:
+            if size > cur:
+                value += w_stack * (size - cur)
+
+    # The reverse is the position there is no recovering from: a small fruit
+    # with something much bigger over it will never meet its partner, and it
+    # holds space for the rest of the game. Broader than `bury`, which counts
+    # only direct contact — a fruit one layer further down is just as
+    # unreachable — but bounded to the band this drop actually covers, so it
+    # prices *this* placement instead of re-charging for damage already done.
+    w_trap = weights.get("trap", 0.0)
+    if w_trap:
+        floor_of_band = y + 2.0 * r
+        for fx, fy, fr, size in fruits:
+            # Two sizes clear, matching `bury`. One size down is ordinary play
+            # — a 6 under a 7 is not trapped, it is the thing you were meant
+            # to land on — and charging for it would make the term fire on
+            # every normal stack.
+            if size > cur - 2:
+                continue
+            if y < fy < floor_of_band and abs(fx - x) < r + fr:
+                value += w_trap * (cur - size)
+
+    return value, x
+
+
+def score_all(state, actions, weights):
+    """The score of every candidate column, not just the winner.
+
+    Used as a supervision target. The argmax alone is a poor thing to imitate:
+    among forty columns several are usually near-equivalent, so which one comes
+    out on top is close to arbitrary and a classifier trained on it is being
+    asked to reproduce a coin flip. The whole vector says which columns are
+    *comparably* good, which is both the useful information and forty times as
+    much of it per board.
+    """
+    fruits = state["fruits"]
+    cur = state["cur"]
+    out = np.empty(actions, dtype=np.float32)
+    for i in range(actions):
+        x = (i / (actions - 1)) * BOARD_W
+        out[i], _ = score_candidate(x, cur, fruits, weights)
+    return out
+
+
+def choose(state, actions, weights):
+    return int(np.argmax(score_all(state, actions, weights)))
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser(description=__doc__,
+                                 formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("--episodes", type=int, default=15)
+    ap.add_argument("--actions", type=int, default=40)
+    ap.add_argument("--max-steps", type=int, default=300)
+    ap.add_argument("--port", type=int, default=8988)
+    ap.add_argument("--random", action="store_true",
+                    help="play randomly instead, to re-measure the floor")
+    ap.add_argument("--policy", choices=sorted(POLICIES), default="greedy",
+                    help="greedy is the policy measured in runs/FINDINGS.md; "
+                         "layered adds the stack and trap terms")
+    for name in WEIGHT_NAMES:
+        ap.add_argument(f"--{name}", type=float,
+                        help=f"override the {name} weight for this policy")
+    args = ap.parse_args()
+
+    from agent import browser_failures, restart_env
+    from suika_env.suika_browser_env import SuikaBrowserEnv
+
+    weights = dict(POLICIES[args.policy])
+    for name in WEIGHT_NAMES:
+        given = getattr(args, name)
+        if given is not None:
+            weights[name] = given
+
+    def make_env():
+        return SuikaBrowserEnv(headless=True, port=args.port,
+                               obs_mode="features")
+
+    browser_dead = browser_failures()
+    env = make_env()
+    bins = np.linspace(0.0, 1.0, args.actions)
+    scores, lengths, partials = [], [], []
+    crashes = 0
+    ep = 0
+    attempts = 0
+    try:
+        while ep < args.episodes:
+            score, steps = 0.0, 0
+            try:
+                env.reset()
+                started = time.time()
+                while steps < args.max_steps:
+                    if args.random:
+                        action = np.random.randint(args.actions)
+                    else:
+                        state = env.driver.execute_script(READ_STATE)
+                        action = choose(state, args.actions, weights)
+                    obs, _r, done, trunc, info = env.step(
+                        np.array([bins[action]], dtype=np.float32))
+                    score = info["score"]
+                    steps += 1
+                    if done or trunc:
+                        break
+            except browser_dead as exc:
+                # Chrome drops the tab on a board with enough bodies on it.
+                # Crashes therefore land on long episodes, which are the
+                # high-scoring ones, so quietly dropping them would drag the
+                # mean down. Replay the episode instead and report the count.
+                crashes += 1
+                partials.append(score)
+                first = str(exc).splitlines()[0]
+                print(f"  episode {ep:>3}  CRASHED at step {steps}"
+                      f" (score so far {score:.0f}) — {first}", flush=True)
+                env = restart_env(env, make_env)
+                attempts += 1
+                if attempts >= 3:
+                    print(f"  episode {ep:>3}  abandoned after 3 crashes",
+                          flush=True)
+                    ep += 1
+                    attempts = 0
+                continue
+
+            attempts = 0
+            scores.append(score)
+            lengths.append(steps)
+            print(f"  episode {ep:>3}  score {score:>7.0f}  steps {steps:>4}"
+                  f"  ({time.time() - started:.0f}s)", flush=True)
+            ep += 1
+    finally:
+        try:
+            env.close()
+        except Exception:      # noqa: BLE001
+            pass
+
+    if not scores:
+        print("  no episodes completed")
+        return 1
+
+    label = "random" if args.random else args.policy
+    sd = statistics.stdev(scores) if len(scores) > 1 else 0.0
+    se = sd / math.sqrt(len(scores)) if scores else 0.0
+    print(f"\n  {label}: n={len(scores)}  mean {statistics.mean(scores):.0f}"
+          f" +/- {se:.0f} (se)  sd {sd:.0f}"
+          f"  min {min(scores):.0f}  max {max(scores):.0f}"
+          f"  mean length {statistics.mean(lengths):.0f}")
+    if crashes:
+        # A lower bound that keeps the censored episodes in, in case the
+        # replayed ones came back systematically shorter.
+        withp = scores + partials
+        print(f"  {crashes} tab crash(es) replayed;"
+              f" mean including their partial scores"
+              f" {statistics.mean(withp):.0f} (lower bound, n={len(withp)})")
+    print("  reference: random 1424 | DQN from scratch 1455 | cloned 2449 | greedy 2497 | layered 2696")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

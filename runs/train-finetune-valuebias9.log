@@ -1,0 +1,69 @@
+registering suika env
+/Users/Owner/miniconda3/envs/tf/lib/python3.10/site-packages/keras/layers/core/lambda_layer.py:327: UserWarning: train is not loaded, but a Lambda layer uses it. It may cause errors.
+  function = cls._parse_function_from_config(
+Metal device set to: Apple M2
+
+systemMemory: 8.00 GB
+maxCacheSize: 2.67 GB
+
+2026-09-03 08:24:27.020347: I tensorflow/core/common_runtime/pluggable_device/pluggable_device_factory.cc:306] Could not identify NUMA node of platform GPU ID 0, defaulting to 0. Your kernel may not have been built with NUMA support.
+2026-09-03 08:24:27.020833: I tensorflow/core/common_runtime/pluggable_device/pluggable_device_factory.cc:272] Created TensorFlow device (/job:localhost/replica:0/task:0/device:GPU:0 with 0 MB memory) -> physical PluggableDevice (device: 0, name: METAL, pci bus id: <undefined>)
+resumed from runs/dqn-finetune.h5
+value head bias set to 9
+learning rate overridden to 1e-05
+Episode    0  reward   1451.0  steps  178  eps 0.050  buffer    178 (0.00 GB)  grads 0
+Episode    1  reward   2133.0  steps  228  eps 0.050  buffer    406 (0.00 GB)  grads 0
+2026-09-03 08:25:13.228331: W tensorflow/core/platform/profile_utils/cpu_utils.cc:128] Failed to get CPU frequency: 0 Hz
+2026-09-03 08:25:13.240282: I tensorflow/core/grappler/optimizers/custom_graph_optimizer_registry.cc:114] Plugin optimizer for device_type GPU is enabled.
+Episode    2  reward   2304.0  steps  231  eps 0.049  buffer    637 (0.01 GB)  grads 58
+Episode    3  reward   1814.0  steps  193  eps 0.049  buffer    830 (0.01 GB)  grads 154
+Episode    4  reward   1415.0  steps  164  eps 0.048  buffer    994 (0.01 GB)  grads 236
+Episode    5  reward   1492.0  steps  190  eps 0.048  buffer   1184 (0.01 GB)  grads 330
+Episode    6  reward   1560.0  steps  193  eps 0.047  buffer   1377 (0.01 GB)  grads 426
+Episode    7  reward   1564.0  steps  189  eps 0.047  buffer   1566 (0.02 GB)  grads 520
+Episode    8  reward   1299.0  steps  175  eps 0.046  buffer   1741 (0.02 GB)  grads 606
+Episode    9  reward   1663.0  steps  200  eps 0.046  buffer   1941 (0.02 GB)  grads 706
+Episode   10  reward   1377.0  steps  184  eps 0.045  buffer   2125 (0.02 GB)  grads 798
+Episode   11  reward   1629.0  steps  187  eps 0.045  buffer   2312 (0.02 GB)  grads 890
+Episode   12  reward   1650.0  steps  178  eps 0.044  buffer   2490 (0.02 GB)  grads 978
+Episode   13  reward   1875.0  steps  221  eps 0.044  buffer   2711 (0.03 GB)  grads 1088
+Episode   14  reward   1767.0  steps  194  eps 0.043  buffer   2905 (0.03 GB)  grads 1184
+Episode   15  reward   2552.0  steps  249  eps 0.043  buffer   3154 (0.03 GB)  grads 1308
+Episode   16  reward   2133.0  steps  224  eps 0.043  buffer   3378 (0.03 GB)  grads 1420
+Episode   17  reward   1456.0  steps  174  eps 0.042  buffer   3552 (0.03 GB)  grads 1506
+Episode   18  reward   2257.0  steps  242  eps 0.042  buffer   3794 (0.04 GB)  grads 1626
+Episode   19  reward   1969.0  steps  220  eps 0.041  buffer   4014 (0.04 GB)  grads 1736
+Episode   20  reward   2452.0  steps  229  eps 0.041  buffer   4243 (0.04 GB)  grads 1850
+Episode   21  reward   2033.0  steps  211  eps 0.040  buffer   4454 (0.04 GB)  grads 1954
+Episode   22  reward   1544.0  steps  170  eps 0.040  buffer   4624 (0.04 GB)  grads 2038
+Episode   23  reward   2403.0  steps  260  eps 0.040  buffer   4884 (0.05 GB)  grads 2168
+Episode   24  reward   2333.0  steps  248  eps 0.039  buffer   5132 (0.05 GB)  grads 2292
+           eval mean   2231.3  over 15 episodes  [1671..2981]  steps 241
+Episode   25  reward   2543.0  steps  259  eps 0.039  buffer   5391 (0.05 GB)  grads 2420
+Episode   26  reward   1975.0  steps  215  eps 0.039  buffer   5606 (0.05 GB)  grads 2526
+Episode   27  reward   2064.0  steps  238  eps 0.038  buffer   5844 (0.06 GB)  grads 2644
+Episode   28  reward   1788.0  steps  209  eps 0.038  buffer   6053 (0.06 GB)  grads 2748
+Episode   29  reward   2066.0  steps  216  eps 0.037  buffer   6269 (0.06 GB)  grads 2856
+Episode   30  reward   1815.0  steps  207  eps 0.037  buffer   6476 (0.06 GB)  grads 2958
+Episode   31  reward   1843.0  steps  204  eps 0.037  buffer   6680 (0.06 GB)  grads 3060
+Episode   32  reward   1832.0  steps  203  eps 0.036  buffer   6883 (0.07 GB)  grads 3160
+Episode   33  reward   1483.0  steps  194  eps 0.036  buffer   7077 (0.07 GB)  grads 3256
+Episode   34  reward   1480.0  steps  188  eps 0.036  buffer   7265 (0.07 GB)  grads 3350
+Episode   35  reward   1840.0  steps  202  eps 0.035  buffer   7467 (0.07 GB)  grads 3450
+Episode   36  reward   1893.0  steps  217  eps 0.035  buffer   7684 (0.07 GB)  grads 3558
+Episode   37  reward   2158.0  steps  229  eps 0.034  buffer   7913 (0.08 GB)  grads 3672
+Episode   38  reward   1960.0  steps  227  eps 0.034  buffer   8140 (0.08 GB)  grads 3784
+Episode   39  browser lost: Message: tab crashed  | free pages 153229  restarting
+Episode   40  reward   2287.0  steps  225  eps 0.033  buffer   8455 (0.08 GB)  grads 3896
+Episode   41  reward   1613.0  steps  192  eps 0.033  buffer   8647 (0.08 GB)  grads 3992
+Episode   42  reward   1495.0  steps  191  eps 0.033  buffer   8838 (0.09 GB)  grads 4086
+Episode   43  reward   2062.0  steps  234  eps 0.032  buffer   9072 (0.09 GB)  grads 4202
+Episode   44  reward   1728.0  steps  188  eps 0.032  buffer   9260 (0.09 GB)  grads 4296
+Episode   45  reward   2710.0  steps  282  eps 0.032  buffer   9542 (0.09 GB)  grads 4436
+Episode   46  reward   1820.0  steps  214  eps 0.031  buffer   9756 (0.09 GB)  grads 4542
+Episode   47  reward   1934.0  steps  218  eps 0.031  buffer   9974 (0.10 GB)  grads 4650
+Episode   48  reward   2689.0  steps  269  eps 0.031  buffer  10243 (0.10 GB)  grads 4784
+Episode   49  reward   1543.0  steps  166  eps 0.031  buffer  10409 (0.10 GB)  grads 4866
+           eval mean   1736.5  over 15 episodes  [1181..2728]  steps 202
+Episode   50  reward   1458.0  steps  180  eps 0.030  buffer  10589 (0.10 GB)  grads 4956
+##### FINETUNE EXITED rc=130

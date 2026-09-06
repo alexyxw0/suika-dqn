@@ -1,0 +1,457 @@
+diff --git a/suika_env/suika-game/index.js b/suika_env/suika-game/index.js
+index af39b2d..6a0cb97 100644
+--- a/suika_env/suika-game/index.js
++++ b/suika_env/suika-game/index.js
+@@ -8,8 +8,30 @@ function mulberry32(a) {
+ 		return ((t ^ t >>> 14) >>> 0) / 4294967296;
+ 	}
+ }
++function runFastPhysics() {
++	const timestep = 1000 / 60; // 60 FPS step
++	const speedMultiplier = 25; // measured: 25x holds the same mean score as 10x
+ 
+-const rand = mulberry32(Date.now());
++	function loop() {
++		for (let i = 0; i < speedMultiplier; i++) {
++			Engine.update(engine, timestep);
++		}
++		requestAnimationFrame(loop);
++	}
++
++	loop();
++}
++
++// A seed in the page URL makes an episode exactly reproducible. The fruit
++// sequence is the only randomness this game has and Matter.js is
++// deterministic, so scoring candidate policies on the same seeds turns a noisy
++// comparison into a paired one: the luck falls identically on both sides and
++// cancels, instead of being averaged away one expensive episode at a time.
++// Read from the URL directly rather than through PAGE_FLAGS, which is defined
++// further down the file than this line runs.
++const SEED_PARAM = new URLSearchParams(location.search).get('seed');
++const rand = mulberry32(
++	SEED_PARAM === null ? Date.now() : (Number(SEED_PARAM) >>> 0));
+ 
+ const {
+ 	Engine, Render, Runner, Composites, Common, MouseConstraint, Mouse,
+@@ -26,6 +48,11 @@ const friction = {
+ 	restitution: 0.1
+ };
+ 
++// The RL environment loads the page with ?mute=1&headless=1.
++const PAGE_FLAGS = new URLSearchParams(location.search);
++const MUTE_AUDIO = PAGE_FLAGS.has('mute');
++const ON_DEMAND_RENDER = PAGE_FLAGS.has('norender');
++
+ const GameStates = {
+ 	MENU: 0,
+ 	READY: 1,
+@@ -47,7 +74,10 @@ const Game = {
+ 		previewBall: null,
+ 	},
+ 	cache: { highscore: 0 },
+-	sounds: {
++	// Muted for headless training: twelve Audio objects fetch and decode mp3s
++	// nothing will ever hear, and every drop and merge schedules a playback.
++	// MUTE_AUDIO is set from the page URL (?mute=1) so a human can still play.
++	sounds: MUTE_AUDIO ? new Proxy({}, { get: () => ({ play() {}, pause() {} }) }) : {
+ 		click: new Audio('./assets/click.mp3'),
+ 		pop0: new Audio('./assets/pop0.mp3'),
+ 		pop1: new Audio('./assets/pop1.mp3'),
+@@ -120,9 +150,32 @@ const Game = {
+ 		localStorage.setItem('suika-game-cache', JSON.stringify(Game.cache));
+ 	},
+ 
++	// Exposed for the RL environment. stateIndex cannot answer "has the fruit
++	// landed" — it is a cooldown for the next drop, and with the physics
++	// accelerated it returns to READY almost immediately. Whether anything is
++	// still moving is the question that actually matters.
++	// Draw a single frame. Used by the environment just before it captures,
++	// so on-demand rendering still yields a current image.
++	renderOnce: function () {
++		Render.world(render);
++	},
++
++	settled: function () {
++		const bodies = Composite.allBodies(engine.world);
++		for (const body of bodies) {
++			if (body.isStatic || body.isSleeping) continue;
++			if (body.speed > 0.4) return false;
++		}
++		return true;
++	},
++
+ 	initGame: function () {
+-		Render.run(render);
+-		Runner.run(runner, engine);
++		// Under the RL environment the canvas is only read at capture time, so
++		// there is no reason to repaint it sixty times a second. Physics still
++		// runs continuously — that is runFastPhysics below, a separate loop.
++		if (ON_DEMAND_RENDER) Render.world(render);
++		else Render.run(render);
++		runFastPhysics();
+ 
+ 		Composite.add(engine.world, menuStatics);
+ 
+@@ -298,7 +351,7 @@ const Game = {
+ 				Composite.add(engine.world, Game.elements.previewBall);
+ 				Game.stateIndex = GameStates.READY;
+ 			}
+-		}, 500);
++		}, 0);
+ 	}
+ }
+ 
+diff --git a/suika_env/suika_browser_env.py b/suika_env/suika_browser_env.py
+index 97bbac6..74f646c 100644
+--- a/suika_env/suika_browser_env.py
++++ b/suika_env/suika_browser_env.py
+@@ -2,18 +2,24 @@ from selenium import webdriver
+ from selenium.webdriver.common.by import By
+ import time
+ import gymnasium
+-import ipdb
+ import io
++import base64
+ import numpy as np    
+ from PIL import Image
+-import imageio
+ import subprocess
+ import socket
+ import os
+ 
+ class SuikaBrowserEnv(gymnasium.Env):
+-    def __init__(self, headless=True, port=8923, delay_before_img_capture=0.5) -> None:
+-        self.game_url = f"http://localhost:{port}/"
++    # stateIndex while a fruit is falling; GameStates in suika-game/index.js
++    STATE_DROP = 2
++
++    def __init__(self, headless=True, port=8923, delay_before_img_capture=0.5,
++                 max_settle_seconds=2.0, settle_poll_seconds=0.004,
++                 min_settle_seconds=0.02, next_fruit_strip=14,
++                 obs_mode="pixels", grid_w=20, grid_h=30) -> None:
++        # Flags the page reads: no audio, and repaint only when asked.
++        self.game_url = f"http://localhost:{port}/?mute=1&norender=1"
+         # Check if port is already in use
+         self.server = None
+         if not self.is_port_in_use(port):
+@@ -21,79 +27,243 @@ class SuikaBrowserEnv(gymnasium.Env):
+             script_dir = os.path.dirname(os.path.realpath(__file__))
+             # Construct the absolute path of the suika-game directory
+             suika_game_dir = os.path.join(script_dir, 'suika-game')
+-            self.server = subprocess.Popen(["python", "-m", "http.server", str(port)], cwd=suika_game_dir, stdout=subprocess.DEVNULL, stderr=subprocess.STDOUT)
++            self.server = subprocess.Popen(["python3", "-m", "http.server", str(port)], cwd=suika_game_dir, stdout=subprocess.DEVNULL, stderr=subprocess.STDOUT)
+ 
+         opts = webdriver.ChromeOptions()
+-        opts.add_argument("--width=1024")
+-        opts.add_argument("--height=768")
++        # --width/--height are Firefox arguments; Chrome silently ignores them,
++        # so the window was whatever the default happened to be.
++        opts.add_argument("--window-size=1024,768")
++        opts.add_argument("--mute-audio")
++        opts.add_argument("--disable-extensions")
++        opts.add_argument("--disable-dev-shm-usage")
++        # Nothing here reads the background tab throttle, and being throttled
++        # would slow the physics loop whenever the window is not foregrounded.
++        opts.add_argument("--disable-background-timer-throttling")
++        opts.add_argument("--disable-renderer-backgrounding")
+         self.headless = headless
+         if headless:
+             opts.add_argument("--headless=new")
+-        self.delay_before_img_capture = delay_before_img_capture
++        self.delay_before_img_capture = delay_before_img_capture  # unused, kept for compatibility
++        self.max_settle_seconds = max_settle_seconds
++        self.settle_poll_seconds = settle_poll_seconds
++        self.min_settle_seconds = min_settle_seconds
++        # Rows at the bottom of the observation reserved for the next fruit.
++        self.next_fruit_strip = next_fruit_strip
++
++        # "pixels" renders the board to a 128x128 image and makes the network
++        # infer fruit positions from it. "features" asks the game for them.
++        # The whole board state is about 30 numbers; the image is 49,152
++        # pixels, and everything the conv stack spends on finding circles is
++        # capacity and samples not spent on where to drop.
++        if obs_mode not in ("pixels", "features"):
++            raise ValueError(f"obs_mode must be 'pixels' or 'features', got {obs_mode!r}")
++        self.obs_mode = obs_mode
++        self.grid_w, self.grid_h = grid_w, grid_h
++        self.n_sizes = 11          # Game.fruitSizes, radii 24..192
+         self.img_width = 128
+         self.img_height = 128
+         self.driver = webdriver.Chrome(options=opts)
+-        _obs_dict = {
+-            'image': gymnasium.spaces.Box(low=0, high=255, shape=(self.img_height, self.img_width, 4),  dtype="uint8"),
+-            'score': gymnasium.spaces.Box(low=0, high=1000000, shape=(1,), dtype="float32"),
+-        }
++        if self.obs_mode == "features":
++            _obs_dict = {
++                # Occupancy grid: channel 0 the normalised size of the fruit
++                # covering a cell, channel 1 its normalised radius. Size is
++                # ordinal here — two of size n merge into one of size n+1 — so
++                # a scalar carries real meaning rather than just compressing.
++                'grid': gymnasium.spaces.Box(
++                    low=0.0, high=1.0,
++                    shape=(self.grid_h, self.grid_w, 2), dtype="float32"),
++                # Everything with no spatial position: what is in hand, what is
++                # next, how many of each size are on the board, how high it is.
++                'vector': gymnasium.spaces.Box(
++                    low=0.0, high=1.0, shape=(self.n_sizes + 4,), dtype="float32"),
++                'score': gymnasium.spaces.Box(
++                    low=0, high=1000000, shape=(1,), dtype="float32"),
++            }
++        else:
++            _obs_dict = {
++                'image': gymnasium.spaces.Box(low=0, high=255, shape=(self.img_height, self.img_width, 3),  dtype="uint8"),
++                'score': gymnasium.spaces.Box(low=0, high=1000000, shape=(1,), dtype="float32"),
++            }
+         self.observation_space = gymnasium.spaces.Dict(_obs_dict)
+         self.action_space = gymnasium.spaces.Box(low=0, high=1, shape=(1,))
+ 
+-    def reset(self,seed=None, options=None):
+-        self._reload()
++    def reset(self, seed=None, options=None):
++        # `seed` is part of the Gymnasium reset contract and was accepted and
++        # then ignored, so every episode drew a fresh fruit sequence whatever
++        # the caller asked for. Honouring it makes an episode reproducible,
++        # which is what lets two policies be compared on the same game.
++        self._reload(seed)
+         info = {}
+         self.score = 0
+         obs, status = self._get_obs_and_status()
+         return obs, info
+ 
+-    def _reload(self):
++    def _reload(self, seed=None):
+         # open the game.
+-        self.driver.get(self.game_url)
++        url = self.game_url
++        if seed is not None:
++            url = f"{url}&seed={int(seed) & 0xFFFFFFFF}"
++        self.driver.get(url)
+         # click start game button with id "start-game-button"
+         self.driver.find_element(By.ID, 'start-game-button').click()
+         time.sleep(1)
+     
++    def _get_features_and_status(self):
++        """The board as numbers, straight from the physics engine.
++
++        Everything here is already exact inside the game: fruit centres,
++        radii and size indices. Rasterising them into a small grid keeps the
++        spatial structure a conv net wants — adjacency of equal sizes is what
++        causes a merge — without asking it to first discover that circles
++        exist.
++        """
++        raw = self.driver.execute_script(
++            "const W = arguments[0], H = arguments[1], N = arguments[2];"
++            "const grid = new Float32Array(W * H * 2);"
++            "const counts = new Float32Array(N);"
++            "let top = H, live = 0;"
++            "const bodies = Composite.allBodies(engine.world);"
++            "for (const b of bodies) {"
++            "  if (b.isStatic || !b.circleRadius) continue;"
++            "  const s = b.sizeIndex; if (s === undefined) continue;"
++            "  live++; counts[s] += 1;"
++            # Rasterise the disc, so extent is represented and not just a point.
++            "  const cx = b.position.x / Game.width  * W;"
++            "  const cy = b.position.y / Game.height * H;"
++            "  const rx = b.circleRadius / Game.width  * W;"
++            "  const ry = b.circleRadius / Game.height * H;"
++            "  const y0 = Math.max(0, Math.floor(cy - ry));"
++            "  const y1 = Math.min(H - 1, Math.ceil(cy + ry));"
++            "  const x0 = Math.max(0, Math.floor(cx - rx));"
++            "  const x1 = Math.min(W - 1, Math.ceil(cx + rx));"
++            "  for (let gy = y0; gy <= y1; gy++) {"
++            "    for (let gx = x0; gx <= x1; gx++) {"
++            "      const dx = (gx + 0.5 - cx) / Math.max(rx, 1e-6);"
++            "      const dy = (gy + 0.5 - cy) / Math.max(ry, 1e-6);"
++            "      if (dx * dx + dy * dy > 1) continue;"
++            "      const i = (gy * W + gx) * 2;"
++            # Larger fruit wins an overlapping cell: it is the one that matters.
++            "      const v = (s + 1) / N;"
++            "      if (v >= grid[i]) { grid[i] = v; grid[i+1] = b.circleRadius / 192; }"
++            "    }"
++            "  }"
++            "  if (cy < top) top = cy;"
++            "}"
++            "return {grid: Array.from(grid), counts: Array.from(counts),"
++            "        top: top, live: live,"
++            "        current: Game.currentFruitSize, next: Game.nextFruitSize,"
++            "        status: Game.stateIndex, score: Game.score};",
++            self.grid_w, self.grid_h, self.n_sizes)
++
++        grid = np.asarray(raw["grid"], dtype=np.float32).reshape(
++            self.grid_h, self.grid_w, 2)
++
++        # Counts are squashed rather than divided by a guessed maximum: the
++        # board can hold very different numbers of small and large fruit, and a
++        # linear scale by a fixed cap would flatten the small-fruit signal.
++        counts = np.asarray(raw["counts"], dtype=np.float32)
++        counts = counts / (counts + 4.0)
++
++        vector = np.concatenate([
++            counts,
++            [(raw["current"] + 1) / self.n_sizes,
++             (raw["next"] + 1) / self.n_sizes,
++             # How full the board is: 0 empty, 1 stacked to the top.
++             1.0 - min(raw["top"], self.grid_h) / self.grid_h,
++             min(raw["live"], 40) / 40.0],
++        ]).astype(np.float32)
++
++        obs = {"grid": grid, "vector": vector,
++               "score": np.array([raw["score"]], dtype=np.float32)}
++        return obs, raw["status"]
++
+     def _get_obs_and_status(self):
+-        img = self._capture_canvas()
+-        status, score = self.driver.execute_script('return [window.Game.stateIndex, window.Game.score];')
+-        score = np.array([score], dtype=np.float32)
+-        return dict(image=img, score=score), status
+-    
++        """Frame, score and state in a single round trip.
++
++        The frame is the full board with a strip along the bottom showing the
++        next fruit. Both were missing before: the board was cropped to 520 of
++        640 pixels, and the next fruit was never in the image at all.
++        """
++        if self.obs_mode == "features":
++            return self._get_features_and_status()
++
++        data_url, status, score = self.driver.execute_script(
++            "const src = document.querySelector('#game-canvas canvas');"
++            "window.Game.renderOnce();"
++            "const W = arguments[0], H = arguments[1], STRIP = arguments[2];"
++            "let off = window.__obsCanvas;"
++            "if (!off) {"
++            "  off = window.__obsCanvas = document.createElement('canvas');"
++            "  off.width = W; off.height = H;"
++            "}"
++            "const ctx = off.getContext('2d');"
++            "ctx.clearRect(0, 0, W, H);"
++            # The whole board, not the left 520 of 640. The action maps to
++            # 0..640, so the old crop let the agent drop fruit into a strip it
++            # had no pixels for.
++            "ctx.drawImage(src, 0, 0, src.width, src.height, 0, 0, W, H - STRIP);"
++            # The fruit about to be dropped lives in a DOM <img>, never on the
++            # canvas, so it was absent from the observation entirely — and in
++            # Suika it is the single most important input to where you place.
++            # Stretched across a reserved strip: each fruit is a distinct
++            # colour, which a conv net reads trivially.
++            "const next = document.getElementById('game-next-fruit');"
++            "if (next && next.complete && next.naturalWidth) {"
++            "  ctx.drawImage(next, 0, H - STRIP, W, STRIP);"
++            "}"
++            "return [off.toDataURL('image/png'),"
++            "        window.Game.stateIndex, window.Game.score];",
++            self.img_width, self.img_height, self.next_fruit_strip)
++
++        raw = base64.b64decode(data_url.split(',', 1)[1])
++        img = np.asarray(Image.open(io.BytesIO(raw)).convert('RGB'))
++        return dict(image=img, score=np.array([score], dtype=np.float32)), status
++
+     def _capture_canvas(self):
+-        # screenshots the game canvas with id "game-canvas" and stores it in a numpy array
+-        canvas = self.driver.find_element(By.ID, 'game-canvas')
+-        image_string = canvas.screenshot_as_png
+-        img = Image.open(io.BytesIO(image_string))
+-        # first crop out right hand side and lower bar.
+-        img = img.crop((0,0,520,img.height))
+-        arr = np.asarray(img)
+-        # imageio.imwrite('cropped.png', arr)
+-        # import ipdb; ipdb.set_trace()
+-        imgResized = img.resize((self.img_width,self.img_height), Image.ANTIALIAS) 
+-        arr = np.asarray(imgResized)
+-        return arr
++        """The game canvas as a 128x128 array.
++
++        Downscaled *in the page*, so only the small image crosses the
++        WebDriver connection. Screenshotting the element instead ships a
++        full-size PNG and resizes it in Python: ~83 ms a step against ~15 ms.
++        """
++        data_url = self.driver.execute_script(
++            # #game-canvas is a div; Matter.js renders into a canvas inside it.
++            "const src = document.querySelector('#game-canvas canvas');"
++            "let off = window.__obsCanvas;"
++            "if (!off) {"
++            "  off = window.__obsCanvas = document.createElement('canvas');"
++            "  off.width = arguments[0]; off.height = arguments[1];"
++            "}"
++            "const ctx = off.getContext('2d');"
++            "ctx.drawImage(src, 0, 0, 520, src.height, 0, 0, arguments[0], arguments[1]);"
++            "return off.toDataURL('image/png');",
++            self.img_width, self.img_height)
++
++        raw = base64.b64decode(data_url.split(',', 1)[1])
++        return np.asarray(Image.open(io.BytesIO(raw)).convert('RGB'))
+ 
+-    
+     def step(self, action):
+         driver = self.driver
+         action = action[0]
+         info = {}
+-        # action is a float from 0 to 1. need to convert to int from 0 to 640 and then string.
+-        action = str(int(action * 640))
+-        # clear the input box with id "fruit-position"
+-        driver.find_element(By.ID, 'fruit-position').clear()
+-        # enter in the number into the input box with id "fruit-position"
+-        driver.find_element(By.ID, 'fruit-position').send_keys(action)
+-        # click the button with id "drop-fruit-button"
+-        driver.find_element(By.ID, 'drop-fruit-button').click()
+-        time.sleep(self.delay_before_img_capture)
++        # action is a float from 0 to 1; convert to a drop position 0-640.
++        position = str(int(action * 640))
++
++        # One script instead of six WebDriver round trips. Each find_element,
++        # clear, send_keys and click is a separate HTTP call to chromedriver;
++        # together they cost ~67 ms, and in the page it is ~2 ms.
++        driver.execute_script(
++            "const box = document.getElementById('fruit-position');"
++            "box.value = arguments[0];"
++            "document.getElementById('drop-fruit-button').click();",
++            position)
++
++        self._wait_until_settled()
+ 
+         obs, status = self._get_obs_and_status()
+         reward = 0
+-        # check if game is over.
+         terminal = status == 3
+-        truncated = False 
++        truncated = False
+         score = obs['score'].item()
+         info['score'] = score
+         reward += score - self.score
+@@ -101,6 +271,34 @@ class SuikaBrowserEnv(gymnasium.Env):
+ 
+         return obs, reward, terminal, truncated, info
+ 
++    def _wait_until_settled(self):
++        """Block until the fruit has landed, rather than for a fixed time.
++
++        The original slept 0.5 s after every drop — 77% of the step, and
++        independent of how fast the physics actually ran, so accelerating the
++        simulation bought nothing at all. This asks the page whether anything
++        is still moving, which runs at the speed of the simulation rather than
++        the clock, and returns as soon as the board is quiet.
++        """
++        # Waiting in the page costs one round trip instead of one per poll.
++        # Polling from Python took ~14 calls for a typical drop; this takes 1.
++        self.driver.execute_async_script(
++            "const done = arguments[2];"
++            "const started = Date.now();"
++            "const minMs = arguments[0], maxMs = arguments[1];"
++            "(function check() {"
++            "  const waited = Date.now() - started;"
++            "  if (waited >= maxMs) return done(false);"
++            "  if (waited >= minMs && window.Game.settled()) return done(true);"
++            # setTimeout, not requestAnimationFrame: rAF only fires every
++            # ~16.7 ms, which adds up to a frame of latency after the board has
++            # actually gone quiet. A 1 ms timer catches it almost immediately.
++            "  setTimeout(check, 1);"
++            "})();",
++            int(self.min_settle_seconds * 1000),
++            int(self.max_settle_seconds * 1000))
++        # Still moving: take the observation anyway rather than stall the
++        # episode. A slightly early frame costs less than a hung run.
+ 
+     def is_port_in_use(self, port):
+         """Check if a given port is already in use"""

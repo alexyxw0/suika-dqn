@@ -1,0 +1,17 @@
+__pycache__/
+*.pyc
+.DS_Store
+
+# upstream env, cloned by the setup steps in README.md — not vendored
+suika_rl/
+
+# checkpoints
+*.h5
+*.keras
+*.npz
+
+# large training artefacts; runs/*.log and FINDINGS.md carry the results
+runs/*.h5
+
+# personal working notes, kept locally
+ORIGINAL-NOTES.txt

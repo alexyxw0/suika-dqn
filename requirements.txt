@@ -1,0 +1,9 @@
+# The environment itself is not vendored — see README.md for the clone + patch
+# steps. These are what train.py needs on top of it.
+tensorflow>=2.13
+numpy>=1.24
+gymnasium>=0.29
+selenium>=4.15
+pillow>=10.0      # the env fix in env-fixes.patch requires Pillow 10+
+matplotlib>=3.7   # scripts/plot.py and curve.py only
+pytest>=7.4       # tests only; tests/ needs none of the above

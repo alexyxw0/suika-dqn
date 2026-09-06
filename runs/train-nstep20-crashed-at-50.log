@@ -1,0 +1,83 @@
+registering suika env
+Metal device set to: Apple M2
+
+systemMemory: 8.00 GB
+maxCacheSize: 2.67 GB
+
+2026-09-03 02:09:10.604243: I tensorflow/core/common_runtime/pluggable_device/pluggable_device_factory.cc:306] Could not identify NUMA node of platform GPU ID 0, defaulting to 0. Your kernel may not have been built with NUMA support.
+2026-09-03 02:09:10.604860: I tensorflow/core/common_runtime/pluggable_device/pluggable_device_factory.cc:272] Created TensorFlow device (/job:localhost/replica:0/task:0/device:GPU:0 with 0 MB memory) -> physical PluggableDevice (device: 0, name: METAL, pci bus id: <undefined>)
+Episode    0  reward   1120.0  steps  152  eps 1.000  buffer    152 (0.00 GB)  grads 0
+Episode    1  reward   1292.0  steps  174  eps 0.990  buffer    326 (0.00 GB)  grads 0
+Episode    2  reward   1623.0  steps  190  eps 0.980  buffer    516 (0.01 GB)  grads 0
+2026-09-03 02:10:15.831949: W tensorflow/core/platform/profile_utils/cpu_utils.cc:128] Failed to get CPU frequency: 0 Hz
+2026-09-03 02:10:15.843448: I tensorflow/core/grappler/optimizers/custom_graph_optimizer_registry.cc:114] Plugin optimizer for device_type GPU is enabled.
+Episode    3  reward    970.0  steps  134  eps 0.970  buffer    650 (0.01 GB)  grads 66
+Episode    4  reward   1804.0  steps  203  eps 0.961  buffer    853 (0.01 GB)  grads 166
+Episode    5  reward   1568.0  steps  175  eps 0.951  buffer   1028 (0.01 GB)  grads 252
+Episode    6  reward    879.0  steps  141  eps 0.941  buffer   1169 (0.01 GB)  grads 322
+Episode    7  reward   1665.0  steps  192  eps 0.932  buffer   1361 (0.01 GB)  grads 418
+Episode    8  reward   1150.0  steps  164  eps 0.923  buffer   1525 (0.01 GB)  grads 500
+Episode    9  reward   1082.0  steps  151  eps 0.914  buffer   1676 (0.02 GB)  grads 574
+Episode   10  reward    820.0  steps  121  eps 0.904  buffer   1797 (0.02 GB)  grads 634
+Episode   11  reward   1922.0  steps  204  eps 0.895  buffer   2001 (0.02 GB)  grads 736
+Episode   12  reward   1320.0  steps  182  eps 0.886  buffer   2183 (0.02 GB)  grads 826
+Episode   13  reward   1121.0  steps  164  eps 0.878  buffer   2347 (0.02 GB)  grads 908
+Episode   14  reward   1000.0  steps  146  eps 0.869  buffer   2493 (0.02 GB)  grads 980
+Episode   15  reward   1106.0  steps  158  eps 0.860  buffer   2651 (0.03 GB)  grads 1058
+Episode   16  reward   1057.0  steps  146  eps 0.851  buffer   2797 (0.03 GB)  grads 1130
+Episode   17  reward   1552.0  steps  190  eps 0.843  buffer   2987 (0.03 GB)  grads 1224
+Episode   18  reward   1198.0  steps  176  eps 0.835  buffer   3163 (0.03 GB)  grads 1312
+Episode   19  reward   1615.0  steps  191  eps 0.826  buffer   3354 (0.03 GB)  grads 1406
+Episode   20  reward   1082.0  steps  144  eps 0.818  buffer   3498 (0.03 GB)  grads 1478
+Episode   21  reward    782.0  steps  121  eps 0.810  buffer   3619 (0.04 GB)  grads 1538
+Episode   22  reward   1302.0  steps  173  eps 0.802  buffer   3792 (0.04 GB)  grads 1624
+Episode   23  reward   2110.0  steps  229  eps 0.794  buffer   4021 (0.04 GB)  grads 1738
+Episode   24  reward    982.0  steps  141  eps 0.786  buffer   4162 (0.04 GB)  grads 1808
+Episode   25  reward   2294.0  steps  243  eps 0.778  buffer   4405 (0.04 GB)  grads 1928
+Episode   26  reward   1199.0  steps  174  eps 0.770  buffer   4579 (0.04 GB)  grads 2014
+Episode   27  reward   1158.0  steps  155  eps 0.762  buffer   4734 (0.05 GB)  grads 2090
+Episode   28  reward   1580.0  steps  191  eps 0.755  buffer   4925 (0.05 GB)  grads 2184
+Episode   29  reward   1160.0  steps  142  eps 0.747  buffer   5067 (0.05 GB)  grads 2254
+Episode   30  reward   1781.0  steps  210  eps 0.740  buffer   5277 (0.05 GB)  grads 2358
+Episode   31  reward   1190.0  steps  168  eps 0.732  buffer   5445 (0.05 GB)  grads 2442
+Episode   32  reward   1180.0  steps  151  eps 0.725  buffer   5596 (0.05 GB)  grads 2516
+Episode   33  reward   1131.0  steps  129  eps 0.718  buffer   5725 (0.06 GB)  grads 2580
+Episode   34  reward    869.0  steps  130  eps 0.711  buffer   5855 (0.06 GB)  grads 2644
+Episode   35  reward    929.0  steps  127  eps 0.703  buffer   5982 (0.06 GB)  grads 2706
+Episode   36  reward    983.0  steps  148  eps 0.696  buffer   6130 (0.06 GB)  grads 2780
+Episode   37  reward   1181.0  steps  153  eps 0.689  buffer   6283 (0.06 GB)  grads 2856
+Episode   38  reward   1987.0  steps  220  eps 0.683  buffer   6503 (0.06 GB)  grads 2966
+Episode   39  reward   1327.0  steps  171  eps 0.676  buffer   6674 (0.06 GB)  grads 3050
+Episode   40  reward   1049.0  steps  145  eps 0.669  buffer   6819 (0.07 GB)  grads 3122
+Episode   41  reward   1731.0  steps  205  eps 0.662  buffer   7024 (0.07 GB)  grads 3224
+Episode   42  reward   1324.0  steps  174  eps 0.656  buffer   7198 (0.07 GB)  grads 3310
+Episode   43  reward   2002.0  steps  226  eps 0.649  buffer   7424 (0.07 GB)  grads 3422
+Episode   44  reward   2013.0  steps  229  eps 0.643  buffer   7653 (0.07 GB)  grads 3536
+Episode   45  reward   1081.0  steps  143  eps 0.636  buffer   7796 (0.08 GB)  grads 3606
+Episode   46  reward   1793.0  steps  207  eps 0.630  buffer   8003 (0.08 GB)  grads 3708
+Episode   47  reward   2325.0  steps  216  eps 0.624  buffer   8219 (0.08 GB)  grads 3816
+Episode   48  reward   1823.0  steps  215  eps 0.617  buffer   8434 (0.08 GB)  grads 3922
+Episode   49  reward    979.0  steps  137  eps 0.611  buffer   8571 (0.08 GB)  grads 3990
+Traceback (most recent call last):
+  File "/Users/Owner/Documents/github_probe/_publish/suika-dqn/train.py", line 521, in <module>
+    raise SystemExit(main())
+  File "/Users/Owner/Documents/github_probe/_publish/suika-dqn/train.py", line 355, in main
+    mean, steps_avg, lo, hi = greedy_evaluation(
+  File "/Users/Owner/Documents/github_probe/_publish/suika-dqn/train.py", line 249, in greedy_evaluation
+    score, steps = greedy_episode(env, model, bins, max_steps, mode)
+  File "/Users/Owner/Documents/github_probe/_publish/suika-dqn/train.py", line 264, in greedy_episode
+    obs, reward, done, truncated, _ = env.step(
+  File "/private/tmp/claude-501/-Users-Owner-Documents-github-probe/93299407-4c91-4fd6-89b0-8e5ca7ed1a44/scratchpad/verify/suika_env/suika_browser_env.py", line 254, in step
+    self._wait_until_settled()
+  File "/private/tmp/claude-501/-Users-Owner-Documents-github-probe/93299407-4c91-4fd6-89b0-8e5ca7ed1a44/scratchpad/verify/suika_env/suika_browser_env.py", line 278, in _wait_until_settled
+    self.driver.execute_async_script(
+  File "/Users/Owner/miniconda3/envs/tf/lib/python3.10/site-packages/selenium/webdriver/remote/webdriver.py", line 632, in execute_async_script
+    return self.execute(command, {"script": script, "args": converted_args})["value"]
+  File "/Users/Owner/miniconda3/envs/tf/lib/python3.10/site-packages/selenium/webdriver/remote/webdriver.py", line 503, in execute
+    self.error_handler.check_response(response)
+  File "/Users/Owner/miniconda3/envs/tf/lib/python3.10/site-packages/selenium/webdriver/remote/errorhandler.py", line 232, in check_response
+    raise exception_class(message, screen, stacktrace)
+selenium.common.exceptions.WebDriverException: Message: tab crashed
+  (Session info: chrome=152.0.7977.65)
+
+##### TRAINING EXITED rc=1

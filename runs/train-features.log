@@ -1,0 +1,110 @@
+registering suika env
+Metal device set to: Apple M2
+
+systemMemory: 8.00 GB
+maxCacheSize: 2.67 GB
+
+2026-09-02 12:28:46.644472: I tensorflow/core/common_runtime/pluggable_device/pluggable_device_factory.cc:306] Could not identify NUMA node of platform GPU ID 0, defaulting to 0. Your kernel may not have been built with NUMA support.
+2026-09-02 12:28:46.644901: I tensorflow/core/common_runtime/pluggable_device/pluggable_device_factory.cc:272] Created TensorFlow device (/job:localhost/replica:0/task:0/device:GPU:0 with 0 MB memory) -> physical PluggableDevice (device: 0, name: METAL, pci bus id: <undefined>)
+Episode    0  reward   1950.0  steps  217  eps 1.000  buffer    217 (0.00 GB)  grads 0
+2026-09-02 12:29:17.154632: W tensorflow/core/platform/profile_utils/cpu_utils.cc:128] Failed to get CPU frequency: 0 Hz
+2026-09-02 12:29:17.250168: I tensorflow/core/grappler/optimizers/custom_graph_optimizer_registry.cc:114] Plugin optimizer for device_type GPU is enabled.
+Episode    1  reward   1361.0  steps  162  eps 0.970  buffer    379 (0.00 GB)  grads 0
+Episode    2  reward   1665.0  steps  201  eps 0.941  buffer    580 (0.01 GB)  grads 0
+Episode    3  reward   1315.0  steps  165  eps 0.913  buffer    745 (0.01 GB)  grads 0
+Episode    4  reward   1649.0  steps  186  eps 0.885  buffer    931 (0.01 GB)  grads 0
+Episode    5  reward   1323.0  steps  157  eps 0.859  buffer   1088 (0.01 GB)  grads 0
+Episode    6  reward    770.0  steps  129  eps 0.833  buffer   1217 (0.01 GB)  grads 0
+Episode    7  reward    864.0  steps  127  eps 0.808  buffer   1344 (0.01 GB)  grads 0
+2026-09-02 12:31:16.342160: I tensorflow/core/grappler/optimizers/custom_graph_optimizer_registry.cc:114] Plugin optimizer for device_type GPU is enabled.
+2026-09-02 12:31:16.811603: I tensorflow/core/grappler/optimizers/custom_graph_optimizer_registry.cc:114] Plugin optimizer for device_type GPU is enabled.
+Episode    8  reward   1420.0  steps  186  eps 0.784  buffer   1530 (0.01 GB)  grads 58
+Episode    9  reward   1366.0  steps  167  eps 0.760  buffer   1697 (0.02 GB)  grads 392
+Episode   10  reward   1888.0  steps  215  eps 0.737  buffer   1912 (0.02 GB)  grads 822
+Episode   11  reward    893.0  steps  139  eps 0.715  buffer   2051 (0.02 GB)  grads 1100
+Episode   12  reward   1606.0  steps  200  eps 0.694  buffer   2251 (0.02 GB)  grads 1500
+Episode   13  reward   1695.0  steps  204  eps 0.673  buffer   2455 (0.02 GB)  grads 1908
+Episode   14  reward   1465.0  steps  182  eps 0.653  buffer   2637 (0.03 GB)  grads 2272
+           eval mean   1447.8  over 5 episodes  [923..2203]  steps 179
+Episode   15  reward   1139.0  steps  170  eps 0.633  buffer   2807 (0.03 GB)  grads 2612
+Episode   16  reward    915.0  steps  148  eps 0.614  buffer   2955 (0.03 GB)  grads 2908
+Episode   17  reward   1169.0  steps  156  eps 0.596  buffer   3111 (0.03 GB)  grads 3220
+Episode   18  reward    746.0  steps  118  eps 0.578  buffer   3229 (0.03 GB)  grads 3456
+Episode   19  reward   1680.0  steps  184  eps 0.561  buffer   3413 (0.03 GB)  grads 3824
+           reset advantage+value at 4000 gradient steps
+Episode   20  reward   2330.0  steps  269  eps 0.544  buffer   3682 (0.04 GB)  grads 4362
+Episode   21  reward   1491.0  steps  179  eps 0.527  buffer   3861 (0.04 GB)  grads 4720
+Episode   22  reward   1654.0  steps  206  eps 0.512  buffer   4067 (0.04 GB)  grads 5132
+Episode   23  browser lost (WebDriverException); restarting it
+Episode   24  reward   1714.0  steps  199  eps 0.481  buffer   4367 (0.04 GB)  grads 5530
+Episode   25  reward   2063.0  steps  231  eps 0.467  buffer   4598 (0.04 GB)  grads 5992
+Episode   26  reward   1348.0  steps  180  eps 0.453  buffer   4778 (0.05 GB)  grads 6352
+Episode   27  reward   1269.0  steps  155  eps 0.439  buffer   4933 (0.05 GB)  grads 6662
+Episode   28  reward   1805.0  steps  200  eps 0.426  buffer   5133 (0.05 GB)  grads 7062
+Episode   29  reward   1080.0  steps  153  eps 0.413  buffer   5286 (0.05 GB)  grads 7368
+           eval mean   1466.2  over 5 episodes  [1223..1719]  steps 179
+Episode   30  reward   1247.0  steps  162  eps 0.401  buffer   5448 (0.05 GB)  grads 7692
+           reset advantage+value at 8000 gradient steps
+Episode   31  reward   1496.0  steps  179  eps 0.389  buffer   5627 (0.05 GB)  grads 8050
+Episode   32  reward   1611.0  steps  198  eps 0.377  buffer   5825 (0.06 GB)  grads 8446
+Episode   33  reward   1484.0  steps  190  eps 0.366  buffer   6015 (0.06 GB)  grads 8826
+Episode   34  reward   1739.0  steps  205  eps 0.355  buffer   6220 (0.06 GB)  grads 9236
+Episode   35  reward   1474.0  steps  176  eps 0.344  buffer   6396 (0.06 GB)  grads 9588
+Episode   36  reward    917.0  steps  130  eps 0.334  buffer   6526 (0.06 GB)  grads 9848
+Episode   37  reward   1029.0  steps  141  eps 0.324  buffer   6667 (0.06 GB)  grads 10130
+Episode   38  reward   1586.0  steps  171  eps 0.314  buffer   6838 (0.07 GB)  grads 10472
+Episode   39  reward   1398.0  steps  183  eps 0.305  buffer   7021 (0.07 GB)  grads 10838
+Episode   40  reward   1214.0  steps  152  eps 0.296  buffer   7173 (0.07 GB)  grads 11142
+Episode   41  browser lost (WebDriverException); restarting it
+Episode   42  reward   1791.0  steps  191  eps 0.278  buffer   7470 (0.07 GB)  grads 11524
+Episode   43  reward   1530.0  steps  180  eps 0.270  buffer   7650 (0.07 GB)  grads 11884
+           reset advantage+value at 12000 gradient steps
+Episode   44  reward   1597.0  steps  182  eps 0.262  buffer   7832 (0.08 GB)  grads 12248
+           eval mean   1401.8  over 5 episodes  [758..1814]  steps 172
+Episode   45  reward   1808.0  steps  205  eps 0.254  buffer   8037 (0.08 GB)  grads 12658
+Episode   46  reward   1217.0  steps  160  eps 0.246  buffer   8197 (0.08 GB)  grads 12978
+Episode   47  reward   1221.0  steps  162  eps 0.239  buffer   8359 (0.08 GB)  grads 13302
+Episode   48  reward   1253.0  steps  167  eps 0.232  buffer   8526 (0.08 GB)  grads 13636
+Episode   49  reward    957.0  steps  137  eps 0.225  buffer   8663 (0.08 GB)  grads 13910
+Episode   50  reward   1524.0  steps  177  eps 0.218  buffer   8840 (0.09 GB)  grads 14264
+Episode   51  reward   1486.0  steps  180  eps 0.212  buffer   9020 (0.09 GB)  grads 14624
+Episode   52  browser lost (TimeoutException); restarting it
+Episode   53  reward   1234.0  steps  168  eps 0.199  buffer   9226 (0.09 GB)  grads 14960
+Episode   54  reward   1454.0  steps  163  eps 0.193  buffer   9389 (0.09 GB)  grads 15286
+Episode   55  reward   1532.0  steps  183  eps 0.187  buffer   9572 (0.09 GB)  grads 15652
+           reset advantage+value at 16000 gradient steps
+Episode   56  reward   1201.0  steps  176  eps 0.182  buffer   9748 (0.09 GB)  grads 16004
+Episode   57  reward   1506.0  steps  178  eps 0.176  buffer   9926 (0.10 GB)  grads 16360
+Episode   58  reward   1476.0  steps  174  eps 0.171  buffer  10000 (0.10 GB)  grads 16708
+Episode   59  reward   1935.0  steps  231  eps 0.166  buffer  10000 (0.10 GB)  grads 17170
+           eval mean   1467.4  over 5 episodes  [1026..1735]  steps 170
+Episode   60  reward   1230.0  steps  170  eps 0.161  buffer  10000 (0.10 GB)  grads 17510
+Episode   61  reward   1671.0  steps  209  eps 0.156  buffer  10000 (0.10 GB)  grads 17928
+Episode   62  reward   1532.0  steps  181  eps 0.151  buffer  10000 (0.10 GB)  grads 18290
+Episode   63  reward   1155.0  steps  150  eps 0.147  buffer  10000 (0.10 GB)  grads 18590
+Episode   64  reward   1312.0  steps  167  eps 0.142  buffer  10000 (0.10 GB)  grads 18924
+Episode   65  reward   1348.0  steps  177  eps 0.138  buffer  10000 (0.10 GB)  grads 19278
+Episode   66  reward   1557.0  steps  186  eps 0.134  buffer  10000 (0.10 GB)  grads 19650
+           reset advantage+value at 20000 gradient steps
+Episode   67  reward   1450.0  steps  184  eps 0.130  buffer  10000 (0.10 GB)  grads 20018
+Episode   68  reward   1327.0  steps  168  eps 0.126  buffer  10000 (0.10 GB)  grads 20354
+Episode   69  reward   1439.0  steps  158  eps 0.122  buffer  10000 (0.10 GB)  grads 20670
+Episode   70  reward   2594.0  steps  272  eps 0.119  buffer  10000 (0.10 GB)  grads 21214
+Episode   71  reward   1900.0  steps  215  eps 0.115  buffer  10000 (0.10 GB)  grads 21644
+Episode   72  reward   1012.0  steps  130  eps 0.112  buffer  10000 (0.10 GB)  grads 21904
+Episode   73  reward   1309.0  steps  162  eps 0.108  buffer  10000 (0.10 GB)  grads 22228
+Episode   74  reward   1173.0  steps  163  eps 0.105  buffer  10000 (0.10 GB)  grads 22554
+           eval mean   2026.6  over 5 episodes  [1656..2928]  steps 219
+Episode   75  reward   1778.0  steps  191  eps 0.102  buffer  10000 (0.10 GB)  grads 22936
+Episode   76  reward   1254.0  steps  176  eps 0.099  buffer  10000 (0.10 GB)  grads 23288
+Episode   77  reward   1745.0  steps  200  eps 0.096  buffer  10000 (0.10 GB)  grads 23688
+           reset advantage+value at 24000 gradient steps
+Episode   78  reward   1796.0  steps  205  eps 0.093  buffer  10000 (0.10 GB)  grads 24098
+Episode   79  reward   2096.0  steps  248  eps 0.090  buffer  10000 (0.10 GB)  grads 24594
+Episode   80  reward   1856.0  steps  189  eps 0.087  buffer  10000 (0.10 GB)  grads 24972
+Episode   81  reward   1245.0  steps  145  eps 0.085  buffer  10000 (0.10 GB)  grads 25262
+Episode   82  reward   1039.0  steps  137  eps 0.082  buffer  10000 (0.10 GB)  grads 25536
+Episode   83  reward    921.0  steps  127  eps 0.080  buffer  10000 (0.10 GB)  grads 25790
+Episode   84  reward   1101.0  steps  160  eps 0.077  buffer  10000 (0.10 GB)  grads 26110
+Episode   85  reward   1408.0  steps  176  eps 0.075  buffer  10000 (0.10 GB)  grads 26462
+Episode   86  reward   1591.0  steps  171  eps 0.073  buffer  10000 (0.10 GB)  grads 26804
