@@ -217,6 +217,57 @@ Seeding is still worth having — it makes a single policy's episode
 reproducible, which is what `scripts/check_seeding.py` verifies — but it is not
 the variance cure it was introduced as.
 
+### 7. Simulating the drop, instead of estimating it, is the one thing that worked
+
+Everything above is built on `landing_y`, which works out where a fruit stops
+in closed form: straight down, halting at the first thing it overlaps. That
+ignores roll, ignores the support being pushed aside, and ignores merges
+resolving mid-fall. Every failure in this document inherited it.
+
+`Game.rollout` replaces it. A scratch Matter.js world is built from the live
+board, the candidate is dropped into it, and it is stepped until nothing is
+moving — the real merge rule included, cascades and the size-wrap and the lose
+condition. A second engine rather than a snapshot of this one, because
+Matter.js has no snapshot and a merge creates and destroys bodies, so an undo
+would have to track composition changes; rebuilding twenty circles is cheaper
+than getting that right. All candidates are scored in one call, since forty
+WebDriver round trips would cost more than the physics.
+
+**It agrees with the game.** `scripts/check_rollout.py` simulates a drop and
+then plays it, thirty times: the score is predicted exactly 90% of the time,
+whether a merge happened 96.7%, and the median fruit ends up **1.7 px** from
+where it was predicted, against a smallest-fruit radius of 24 px.
+
+The policy ranks all forty columns with the cheap estimate, simulates the top
+five, and chooses on the settled board — points actually gained, how high the
+pile ended up, same-size pairs left within reach, small fruit left buried.
+Nothing estimated. The shortlist is a choice rather than a necessity: the
+estimate is perfectly good at spotting bad columns, and it is the ordering
+among the *good* ones that roll and displacement decide.
+
+Six rounds of five episodes each, the order of the two arms alternating every
+round:
+
+| | mean | se | sd | episode length |
+|---|---|---|---|---|
+| **rollout, top 5** | **2826** | 80 | 436 | **286** |
+| estimate only | 2582 | 82 | 448 | 266 |
+
+`+244 ± 114`, 2.1σ, permutation `p = 0.037`. The rollout won **6 of 6 rounds**,
+a sign test at `p = 0.031` — two tests agreeing, one on size and one on
+consistency. Episode length rose 266 to 286, which is the survival channel the
+baseline identified at the start as carrying the score, so the gain appears
+where the theory says it should.
+
+Eleven of thirty episodes reached 3000 or above, against seven of thirty.
+
+**The cost was misjudged for a long time.** This document previously argued
+rollouts were impractical at "~80 ms a candidate, about 15 minutes an episode".
+Measured, a candidate costs **13.7 ms** — all forty would be 549 ms a move,
+roughly three minutes an episode. The 80 ms figure was wall-clock settling in
+the live game, which steps physics on `requestAnimationFrame` and is therefore
+frame-paced; a scratch engine has no renderer and no frame pacing.
+
 ## What would plausibly move it
 
 The heuristic never simulates — it estimates where a fruit lands and never
@@ -224,10 +275,10 @@ checks. Every failure above traces back to that estimate: the lookahead
 compounded its error, the value network was trained on estimated afterstates,
 and CEM could only re-weight estimates.
 
-Real physics rollouts on the top 3–5 candidates, rather than all 40, replaces
-the estimate with ground truth at roughly 5 x 80 ms a move. That is a change of
-policy class rather than another pass at tuning, and it is the next thing worth
-building.
+That was done — see above. It is the only change in this document that moved
+the ceiling. What follows from it: the agent has tracked its teacher closely
+throughout, so the next step is a fresh demonstration set from the rollout
+teacher and a re-clone, which has never been run.
 
 ## Reproducing
 

@@ -15,8 +15,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "scripts"))
 
 import numpy as np
 
-from heuristic import (BOARD_W, FLOOR_Y, POLICIES, RADII, choose, contacts,
-                       landing_y, score_all, score_candidate)
+from heuristic import (BOARD_W, BOARD_WEIGHTS, FLOOR_Y, POLICIES, RADII,
+                       buried_small, choose, contacts, landing_y,
+                       ready_pairs, score_all, score_board,
+                       score_candidate)
 
 WEIGHTS = {"merge": 30.0, "chain": 60.0, "low": 200.0, "bury": -8.0,
            "stack": 0.0, "trap": 0.0}
@@ -210,3 +212,87 @@ class TestStackAndTrap:
                   for k in ("merge", "chain", "low", "bury")}
         old_way, _ = score_candidate(100, 1, board, legacy)
         assert with_new == pytest.approx(old_way)
+
+
+class TestReadyPairs:
+    def test_an_empty_board_has_none(self):
+        assert ready_pairs([]) == 0
+
+    def test_two_touching_same_size_fruit_count(self):
+        f = [(100, 800, 24, 0), (140, 800, 24, 0)]
+        assert ready_pairs(f) == 1
+
+    def test_different_sizes_do_not_count(self):
+        f = [(100, 800, 24, 0), (140, 800, 32, 1)]
+        assert ready_pairs(f) == 0
+
+    def test_the_same_size_far_apart_does_not_count(self):
+        f = [(50, 800, 24, 0), (600, 800, 24, 0)]
+        assert ready_pairs(f) == 0
+
+    def test_three_in_a_row_counts_only_the_pairs_within_reach(self):
+        # Neighbours are 40px apart and the threshold is (24+24)*1.45 = 70,
+        # so the two adjacent pairs count and the outer pair, 80px apart,
+        # does not. Counting it would make a long row look like a merge
+        # bonanza when only its neighbours can actually meet.
+        f = [(100, 800, 24, 0), (140, 800, 24, 0), (180, 800, 24, 0)]
+        assert ready_pairs(f) == 2
+
+
+class TestBuriedSmall:
+    def test_an_empty_board_has_none(self):
+        assert buried_small([]) == 0
+
+    def test_a_big_fruit_over_a_small_one_buries_it(self):
+        f = [(100, 800, 24, 0), (100, 700, 96, 7)]
+        assert buried_small(f) == 1
+
+    def test_a_big_fruit_below_buries_nothing(self):
+        f = [(100, 800, 96, 7), (100, 600, 24, 0)]
+        assert buried_small(f) == 0
+
+    def test_one_size_apart_is_ordinary_play(self):
+        f = [(100, 800, 84, 6), (100, 700, 96, 7)]
+        assert buried_small(f) == 0
+
+    def test_a_fruit_off_to_the_side_buries_nothing(self):
+        f = [(100, 800, 24, 0), (600, 700, 96, 7)]
+        assert buried_small(f) == 0
+
+    def test_each_buried_fruit_is_counted_once(self):
+        f = [(100, 800, 24, 0), (100, 700, 96, 7), (100, 650, 128, 8)]
+        assert buried_small(f) == 1
+
+
+class TestScoreBoard:
+    def _r(self, **kw):
+        base = {"fruits": [], "gained": 0, "lost": False}
+        base.update(kw)
+        return base
+
+    def test_points_scored_raise_the_value(self):
+        w = BOARD_WEIGHTS
+        assert score_board(self._r(gained=10), w) > score_board(self._r(), w)
+
+    def test_losing_is_heavily_penalised(self):
+        w = BOARD_WEIGHTS
+        assert score_board(self._r(lost=True, gained=66), w) < \
+               score_board(self._r(), w)
+
+    def test_a_higher_pile_scores_worse(self):
+        w = BOARD_WEIGHTS
+        low = self._r(fruits=[(320, FLOOR_Y - 24, 24, 0)])
+        high = self._r(fruits=[(320, 100, 24, 0)])
+        assert score_board(low, w) > score_board(high, w)
+
+    def test_a_pair_waiting_to_merge_is_worth_something(self):
+        w = BOARD_WEIGHTS
+        apart = self._r(fruits=[(60, 800, 24, 0), (600, 800, 24, 0)])
+        together = self._r(fruits=[(300, 800, 24, 0), (340, 800, 24, 0)])
+        assert score_board(together, w) > score_board(apart, w)
+
+    def test_burying_a_small_fruit_costs(self):
+        w = BOARD_WEIGHTS
+        clear = self._r(fruits=[(100, 800, 24, 0), (500, 700, 96, 7)])
+        buried = self._r(fruits=[(100, 800, 24, 0), (100, 700, 96, 7)])
+        assert score_board(clear, w) > score_board(buried, w)

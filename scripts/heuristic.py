@@ -44,6 +44,13 @@ POLICIES = {
     "layered": dict(merge=250.0, chain=60.0, low=200.0, bury=-8.0,
                     stack=25.0, trap=-20.0),
 }
+
+# Scoring a *settled* board rather than a placement. Only reachable with
+# --rollout, which replaces the landing estimate with the real physics, so
+# these terms can read the board that actually results instead of a guess at
+# it. `gained` is in game points; the rest are shaped to sit alongside them.
+BOARD_WEIGHTS = dict(gained=12.0, lost=-4000.0, top=-900.0, ready=25.0,
+                     buried=-12.0)
 WEIGHT_NAMES = ("merge", "chain", "low", "bury", "stack", "trap")
 
 # Reading the board is one script call; doing it per candidate would be 40.
@@ -148,6 +155,79 @@ def score_candidate(x, cur, fruits, weights):
     return value, x
 
 
+def ready_pairs(fruits, slack=1.45):
+    """Same-size fruit close enough to be a merge waiting to happen."""
+    n = 0
+    for i in range(len(fruits)):
+        xi, yi, ri, si = fruits[i]
+        for j in range(i + 1, len(fruits)):
+            xj, yj, rj, sj = fruits[j]
+            if si != sj:
+                continue
+            if math.hypot(xi - xj, yi - yj) <= (ri + rj) * slack:
+                n += 1
+    return n
+
+
+def buried_small(fruits, gap=2):
+    """Fruit with something at least `gap` sizes larger sitting over it.
+
+    The position there is no recovering from: it cannot reach a partner, and it
+    holds space for the rest of the game.
+    """
+    n = 0
+    for xi, yi, ri, si in fruits:
+        for xj, yj, rj, sj in fruits:
+            if sj - si < gap:
+                continue
+            if yj < yi and abs(xi - xj) < ri + rj:
+                n += 1
+                break
+    return n
+
+
+def score_board(result, weights):
+    """How good is the board this drop actually produced?
+
+    Takes the output of `Game.rollout` — a settled board, the points the drop
+    really scored, and whether it lost the game. Nothing here is estimated,
+    which is the whole point: `score_candidate` has to guess where a fruit
+    stops and then reason about a board that may not exist.
+    """
+    fruits = result["fruits"]
+    value = weights["gained"] * result["gained"]
+    if result["lost"]:
+        value += weights["lost"]
+    if fruits:
+        highest = min(fy - fr for _fx, fy, fr, _s in fruits)
+        value += weights["top"] * max(0.0, 1.0 - highest / FLOOR_Y)
+    value += weights["ready"] * ready_pairs(fruits)
+    value += weights["buried"] * buried_small(fruits)
+    return value
+
+
+def choose_by_rollout(env, state, actions, weights, board_weights, top_k):
+    """Rank cheaply, then simulate the shortlist and pick on the truth.
+
+    Rolling out all forty costs about 550 ms a move, which is affordable but
+    wasteful — most columns are obviously poor and the closed-form estimate
+    identifies them perfectly well. It is the ordering among the *good* ones
+    that the estimate gets wrong, because that is where roll and displacement
+    decide the outcome. So the estimate shortlists and the physics decides.
+    """
+    est = score_all(state, actions, weights)
+    order = [int(i) for i in np.argsort(-est)[:top_k]]
+    xs = [float(int((i / (actions - 1)) * BOARD_W)) for i in order]
+    results = env.driver.execute_script(
+        "return Game.rollout(arguments[0], arguments[1]);", xs, state["cur"])
+    best_value, best_action = -1e18, order[0]
+    for action, result in zip(order, results):
+        value = score_board(result, board_weights)
+        if value > best_value:
+            best_value, best_action = value, action
+    return best_action
+
+
 def score_all(state, actions, weights):
     """The score of every candidate column, not just the winner.
 
@@ -176,6 +256,11 @@ def main() -> int:
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--episodes", type=int, default=15)
     ap.add_argument("--actions", type=int, default=40)
+    ap.add_argument("--rollout", type=int, default=0, metavar="K",
+                    help="simulate the top K candidates with the real physics "
+                         "and choose on the settled board rather than on an "
+                         "estimate of where the fruit stops. 0 disables it. "
+                         "About 14 ms a candidate")
     ap.add_argument("--seed-base", type=int,
                     help="play seeded games: episode i uses seed SEED_BASE+i. "
                          "Two policies given the same base see identical fruit "
@@ -226,7 +311,12 @@ def main() -> int:
                         action = np.random.randint(args.actions)
                     else:
                         state = env.driver.execute_script(READ_STATE)
-                        action = choose(state, args.actions, weights)
+                        if args.rollout:
+                            action = choose_by_rollout(
+                                env, state, args.actions, weights,
+                                BOARD_WEIGHTS, args.rollout)
+                        else:
+                            action = choose(state, args.actions, weights)
                     obs, _r, done, trunc, info = env.step(
                         np.array([bins[action]], dtype=np.float32))
                     score = info["score"]
@@ -270,6 +360,8 @@ def main() -> int:
 
     label = "random" if args.random else args.policy
     label += f" ({args.actions} actions)"
+    if args.rollout:
+        label += f" +rollout{args.rollout}"
     sd = statistics.stdev(scores) if len(scores) > 1 else 0.0
     se = sd / math.sqrt(len(scores)) if scores else 0.0
     print(f"\n  {label}: n={len(scores)}  mean {statistics.mean(scores):.0f}"

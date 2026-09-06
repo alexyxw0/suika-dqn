@@ -15,6 +15,7 @@ baseline to get an agent that plays.
 | DQN from scratch, original head | 1455 | 79 | 16 |
 | **DQN cloned into a column-aligned head** | **2449** | 72 | 45 |
 | hand-written policy (the teacher) | 2696 | 68 | 62 |
+| the same policy, simulating its candidate drops | **2826** | 80 | 30 |
 
 `runs/FINDINGS.md` has the full record, including the things that did not work
 and what they cost.
@@ -60,7 +61,7 @@ after every hunk.
 The pipeline that produced the 2449 agent:
 
 ```bash
-python scripts/heuristic.py --episodes 30 --policy layered   # measure the teacher
+python scripts/heuristic.py --episodes 30 --policy layered --rollout 5   # the teacher
 python scripts/collect_demos.py --episodes 90                # ~24k labelled boards
 python scripts/pretrain.py                                   # clone it, ~5 min
 python scripts/eval_policy.py --checkpoint runs/bc.h5 --episodes 25
@@ -98,6 +99,14 @@ transferred to the next. Handed perfect demonstrations it reaches a training
 loss of 0.64 where this head reaches 0.246: it underfits, rather than
 overfitting, which is why regularising it did not help.
 
+**Simulated drops.** `Game.rollout` builds a scratch Matter.js world from the
+live board, drops a candidate into it, and steps until nothing moves — the real
+merge rule included. The policy shortlists with a closed-form landing estimate
+and then decides on boards the physics actually produced. Verified against the
+game by simulating a drop and then playing it: the score is right 90% of the
+time and the median fruit lands 1.7 px from where it was predicted, against a
+24 px smallest radius.
+
 **Environment.** The upstream step took 640 ms, of which 500 was a fixed
 `time.sleep(0.5)` after every drop. The patch replaces that with a real settle
 predicate evaluated inside the page, raises the physics multiplier to 25x,
@@ -117,9 +126,10 @@ moving.
   scale were never ablated individually.** They are standard and cheap, and the
   bugs fixed in them were real correctness bugs, but this repo does not claim a
   measured benefit for any of them.
-- **The teacher never simulates.** It estimates where a fruit lands and never
-  checks. Real physics rollouts on the top few candidates is the next thing
-  worth building, and `runs/FINDINGS.md` explains why that is the constraint.
+- **The agent has not been re-cloned from the rollout teacher.** Simulating
+  the candidate drops raised the teacher from 2582 to 2826 (`p = 0.037`), but
+  the 2449 agent was distilled from the older, estimate-based one. That
+  re-clone is the obvious next run and has not been done.
 
 ## Layout
 
