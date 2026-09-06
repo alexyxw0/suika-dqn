@@ -5,8 +5,8 @@ fruit-merging puzzle game, trained against a browser-based Gymnasium
 environment driven through Selenium.
 
 The short version: a Q-network trained from scratch never beat random play. It
-took a hand-written baseline to discover why — the network's head could not
-represent a per-column value function at all — and behaviour cloning from that
+took a hand-written baseline to discover why — the network's head gave it no
+way to *learn* a value per board column — and behaviour cloning from that
 baseline to get an agent that plays.
 
 | policy | mean score | se | n |
@@ -87,10 +87,16 @@ engine rather than from pixels.
 
 **Network.** A convolutional stack that never strides the board's width. Height
 is reduced away, leaving one feature vector per board column; the global vector
-is broadcast onto every column; the head emits values that stay tied to the
-column they refer to. This is the part that mattered — the original head
-flattened the board and rebuilt 40 values from a dense layer, and scores
-random-level even when handed perfect demonstrations.
+is broadcast onto every column; a width-1 convolution then scores every column
+with *the same* weights, so a merge pattern learned at one position applies at
+all of them.
+
+This is the part that mattered. The original head halved the width twice and
+flattened, so position survived only as an index into a 2560-vector, and each
+of the 40 outputs had its own parameters — nothing learned about one column
+transferred to the next. Handed perfect demonstrations it reaches a training
+loss of 0.64 where this head reaches 0.246: it underfits, rather than
+overfitting, which is why regularising it did not help.
 
 **Environment.** The upstream step took 640 ms, of which 500 was a fixed
 `time.sleep(0.5)` after every drop. The patch replaces that with a real settle

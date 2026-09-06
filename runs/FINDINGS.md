@@ -56,11 +56,20 @@ floor. Then the same network was given *perfect demonstrations* and cloned:
 | **column** | **2449** | **0.135** | **171,971** |
 
 The original head took the board's width from 20 columns down to 5 through two
-stride-2 convolutions, then asked a dense bottleneck to rebuild 40
-column-indexed Q-values — destroying exactly the alignment a "which column"
-action space depends on. It scores random-level *given perfect examples*, which
-is what makes this the explanation for all three earlier non-results rather
-than one more hypothesis.
+stride-2 convolutions and then flattened, so board position survived only as an
+index into a 2560-vector that a dense layer treats symmetrically. Worse, each
+of the 40 outputs carried its own parameters: whatever the network learned
+about a column at one position did not transfer to the next, so the same
+pattern had to be relearned forty times.
+
+Not a hard limit on what those weights *could* express — a 740k-parameter
+network can approximate a great deal. A limit on what this data could teach
+them. The training losses say which: 0.64 for the dense head against 0.246 for
+the column head, so it failed to fit examples it had already seen. Underfitting,
+not overfitting, which is why regularising it changed nothing.
+
+It scores random-level *given perfect examples*, and that is what makes this the
+explanation for all three earlier non-results rather than one more hypothesis.
 
 The column head never strides width. It reduces height away, leaves one feature
 vector per board column, broadcasts the global context (fruit in hand, fruit
