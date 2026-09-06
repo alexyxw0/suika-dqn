@@ -48,7 +48,10 @@ not scoring better per placement.
 ### 2. The architecture was the blocker, not the learning signal
 
 Three attempts to fix the reward signal all produced a policy at the random
-floor. Then the same network was given *perfect demonstrations* and cloned:
+floor. They found real bugs on the way — an n-step return discounted by `gamma`
+once instead of `gamma**k`, truncation treated as termination, a terminal state
+carrying no penalty when score deltas are never negative — and fixing them
+changed nothing measurable. Then the same network was given *perfect demonstrations* and cloned:
 
 | head | cloned score | imitation regret | parameters |
 |---|---|---|---|

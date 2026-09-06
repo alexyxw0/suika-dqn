@@ -174,10 +174,12 @@ def td_targets(rewards, dones, next_qs, gamma: float, steps=None):
     happens to predict for the frame after the game ended.
 
     `steps` is the per-sample n-step length. Without it an n-step return gets
-    discounted by gamma once instead of gamma**n, which silently overvalues the
-    bootstrap by a factor of gamma**(1-n) — harmless at n=3 and a 5x error at
-    n=20. `double_td_targets` always took this argument; this one did not, so
-    the bug only showed up under `--no-double`.
+    discounted by gamma once instead of gamma**n, which overvalues the bootstrap
+    by gamma**(1-n): at gamma 0.99 that is 2% at n=3 and 21% at n=20, and it
+    grows sharply as gamma falls (7.4x at n=20 with gamma 0.9). A systematic
+    bias on every sample rather than a catastrophe, and wrong either way.
+    `double_td_targets` always took this argument; this one did not, so the bug
+    only showed up under `--no-double`.
     """
     rewards = np.asarray(rewards, dtype=np.float32)
     dones = np.asarray(dones, dtype=np.float32)
