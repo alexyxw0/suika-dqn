@@ -111,6 +111,25 @@ python scripts/fit_value.py --members 4              # -> runs/value/
 python scripts/eval_value.py --episodes 20
 ```
 
+## Watching it play
+
+```bash
+python scripts/dashboard.py            # then open http://localhost:8500
+```
+
+A local control panel: pick any policy — random, either hand-written variant,
+the simulating one, or any trained checkpoint in `runs/` — and watch it play.
+The board is drawn from the fruit positions read out of the physics engine, so
+it is the board the policy is actually reasoning about rather than a
+screenshot of one.
+
+For the policies that simulate their candidates, the columns they weighed are
+drawn on the board and listed with what each was worth, which is the part worth
+watching: you can see the shortlist, the points each candidate would score, and
+which one was taken.
+
+`--show-browser` also opens the real game window alongside it.
+
 ## How it works
 
 **Observation.** The board rasterised into a 30×20×2 grid (fruit size, radius)
@@ -143,6 +162,7 @@ train.py              RL loop: replay, n-step targets, compiled gradient step
 agent.py              replay buffer, n-step returns, TD targets, crash recovery
 afterstate.py         encodes a candidate board the way the page does
 scripts/heuristic.py  the hand-written policy, and the random baseline
+scripts/dashboard.py  local control panel for watching any policy play
 scripts/              demonstrations, cloning, evaluation, plotting, checks
 tests/                139 tests, pure numpy, no browser required
 runs/FINDINGS.md      every measurement, including the failures

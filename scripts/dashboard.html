@@ -1,0 +1,327 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Suika Agent Monitor</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap">
+<style>
+:root{
+  --ground:#f6f6f2; --surface:#fffffe; --sunk:#eeeee7;
+  --ink:#15170f; --ink-2:#5c6051; --ink-3:#8a8e7f;
+  --line:#e0e1d7; --line-2:#cfd1c4;
+  --accent:#1c6b66; --accent-soft:#e2efed;
+  --good:#3f7d3a; --warn:#a8701c; --bad:#a63a28;
+  --radius:10px;
+  --font-ui:"Archivo",system-ui,-apple-system,"Segoe UI",sans-serif;
+  --font-num:"IBM Plex Mono",ui-monospace,"SF Mono",Menlo,monospace;
+}
+@media (prefers-color-scheme:dark){
+  :root:not([data-theme="light"]){
+    --ground:#131510; --surface:#1b1e17; --sunk:#101208;
+    --ink:#edefe4; --ink-2:#a0a494; --ink-3:#6f7464;
+    --line:#2a2e23; --line-2:#3a3f31;
+    --accent:#5cb8b0; --accent-soft:#1a2b29;
+    --good:#7bbf6a; --warn:#d2a04a; --bad:#dd7a63;
+  }
+}
+:root[data-theme="dark"]{
+  --ground:#131510; --surface:#1b1e17; --sunk:#101208;
+  --ink:#edefe4; --ink-2:#a0a494; --ink-3:#6f7464;
+  --line:#2a2e23; --line-2:#3a3f31;
+  --accent:#5cb8b0; --accent-soft:#1a2b29;
+  --good:#7bbf6a; --warn:#d2a04a; --bad:#dd7a63;
+}
+*{box-sizing:border-box}
+body{
+  margin:0; background:var(--ground); color:var(--ink);
+  font-family:var(--font-ui); font-size:14px; line-height:1.5;
+  -webkit-font-smoothing:antialiased;
+}
+.wrap{max-width:1120px; margin:0 auto; padding:28px 24px 40px}
+header{display:flex; align-items:baseline; gap:14px; flex-wrap:wrap; margin-bottom:22px}
+h1{font-size:21px; font-weight:700; letter-spacing:-.015em; margin:0}
+.sub{color:var(--ink-3); font-size:13px}
+.grid{display:grid; grid-template-columns:minmax(300px,400px) 1fr; gap:24px; align-items:start}
+@media (max-width:820px){.grid{grid-template-columns:1fr}}
+
+.stage{background:var(--surface); border:1px solid var(--line); border-radius:var(--radius); padding:14px}
+canvas{display:block; width:100%; height:auto; border-radius:6px; background:var(--sunk)}
+.stage-foot{display:flex; justify-content:space-between; align-items:center; gap:10px;
+  margin-top:10px; color:var(--ink-3); font-size:12px}
+.hint{font-family:var(--font-num); font-size:11.5px}
+
+.rail{display:flex; flex-direction:column; gap:18px}
+.panel{background:var(--surface); border:1px solid var(--line); border-radius:var(--radius)}
+.panel > h2{
+  margin:0; padding:12px 15px; font-size:11px; font-weight:600; letter-spacing:.09em;
+  text-transform:uppercase; color:var(--ink-3); border-bottom:1px solid var(--line);
+}
+.panel-body{padding:13px 15px}
+
+.group-label{font-size:10.5px; letter-spacing:.09em; text-transform:uppercase;
+  color:var(--ink-3); margin:12px 0 6px; font-weight:600}
+.group-label:first-child{margin-top:0}
+.opt{display:block; position:relative; padding:8px 11px 8px 32px; border-radius:7px; cursor:pointer;
+  border:1px solid transparent}
+.opt:hover{background:var(--sunk)}
+.opt input{position:absolute; left:11px; top:11px; accent-color:var(--accent); margin:0}
+.opt input:focus-visible{outline:2px solid var(--accent); outline-offset:2px}
+.opt-name{font-weight:500; font-size:13.5px}
+.opt-note{color:var(--ink-3); font-size:12px; line-height:1.4}
+.opt:has(input:checked){background:var(--accent-soft); border-color:var(--accent)}
+
+.controls{display:flex; gap:9px; padding:13px 15px; border-top:1px solid var(--line)}
+button{
+  font-family:var(--font-ui); font-size:13.5px; font-weight:600; padding:9px 18px;
+  border-radius:7px; border:1px solid transparent; cursor:pointer;
+}
+button:focus-visible{outline:2px solid var(--accent); outline-offset:2px}
+.play{background:var(--accent); color:#fff; flex:1}
+.play:disabled{opacity:.4; cursor:not-allowed}
+.stop{background:transparent; color:var(--ink-2); border-color:var(--line-2)}
+.stop:hover:not(:disabled){border-color:var(--bad); color:var(--bad)}
+.stop:disabled{opacity:.4; cursor:not-allowed}
+
+.stats{display:grid; grid-template-columns:repeat(4,1fr); gap:1px; background:var(--line)}
+.stat{background:var(--surface); padding:11px 13px}
+.stat .k{font-size:10.5px; letter-spacing:.07em; text-transform:uppercase; color:var(--ink-3)}
+.stat .v{font-family:var(--font-num); font-size:19px; font-weight:500; font-variant-numeric:tabular-nums;
+  margin-top:2px}
+
+.state-pill{display:inline-flex; align-items:center; gap:6px; font-size:12px; font-weight:600;
+  padding:3px 10px; border-radius:99px; font-family:var(--font-num)}
+.state-idle{background:var(--sunk); color:var(--ink-3)}
+.state-live{background:var(--accent-soft); color:var(--accent)}
+.dot{width:6px; height:6px; border-radius:99px; background:currentColor}
+.state-live .dot{animation:pulse 1.4s ease-in-out infinite}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.25}}
+@media (prefers-reduced-motion:reduce){.state-live .dot{animation:none}}
+
+table{width:100%; border-collapse:collapse; font-family:var(--font-num); font-size:12.5px;
+  font-variant-numeric:tabular-nums}
+th{text-align:right; font-weight:500; color:var(--ink-3); font-size:10.5px; letter-spacing:.06em;
+  text-transform:uppercase; padding:0 0 6px}
+th:first-child{text-align:left}
+td{padding:5px 0; border-top:1px solid var(--line); text-align:right}
+td:first-child{text-align:left}
+tr.taken td{color:var(--accent); font-weight:600}
+.empty{color:var(--ink-3); font-size:12.5px; padding:2px 0}
+.err{color:var(--bad); font-size:12.5px; font-family:var(--font-num); padding:2px 0; word-break:break-word}
+.spark{display:block; width:100%; height:44px; margin-top:4px}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>Suika Agent Monitor</h1>
+    <span class="sub">watching the board the policy actually reasons about &mdash; fruit positions straight from the physics engine</span>
+  </header>
+
+  <div class="grid">
+    <div class="stage">
+      <canvas id="board" width="640" height="960" aria-label="Suika board"></canvas>
+      <div class="stage-foot">
+        <span id="stageNote">example board &mdash; choose a policy and press Play</span>
+        <span class="hint" id="think"></span>
+      </div>
+    </div>
+
+    <div class="rail">
+      <div class="panel">
+        <h2>Policy</h2>
+        <div class="panel-body" id="picker"><div class="empty">loading&hellip;</div></div>
+        <div class="controls">
+          <button class="play" id="play">Play</button>
+          <button class="stop" id="stop" disabled>Stop</button>
+        </div>
+      </div>
+
+      <div class="panel">
+        <h2>Live <span id="pill" class="state-pill state-idle"><span class="dot"></span>idle</span></h2>
+        <div class="stats">
+          <div class="stat"><div class="k">Score</div><div class="v" id="score">&mdash;</div></div>
+          <div class="stat"><div class="k">Drops</div><div class="v" id="step">&mdash;</div></div>
+          <div class="stat"><div class="k">Episode</div><div class="v" id="ep">&mdash;</div></div>
+          <div class="stat"><div class="k">Best</div><div class="v" id="best">&mdash;</div></div>
+        </div>
+        <div class="panel-body">
+          <div class="k" style="font-size:10.5px;letter-spacing:.07em;text-transform:uppercase;color:var(--ink-3)">Finished episodes</div>
+          <svg class="spark" id="spark" viewBox="0 0 300 44" preserveAspectRatio="none" aria-label="score per finished episode"></svg>
+          <div id="err"></div>
+        </div>
+      </div>
+
+      <div class="panel">
+        <h2>Candidates considered</h2>
+        <div class="panel-body" id="shortlist">
+          <div class="empty">Policies that simulate their moves list the columns they weighed, and what each one was worth.</div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+const FRUIT = ["#e8453c","#ef6d3f","#a855c9","#f5a02a","#ef7f2a","#dc3b32",
+               "#dfd449","#f3a6b6","#f0cf3c","#a9d451","#2f7d33"];
+const LOSE_Y = 84, FLOOR_Y = 912, BOARD_W = 640, BOARD_H = 960;
+const EXAMPLE = [[92,872,40,2],[196,880,32,1],[300,848,64,4],[430,872,40,2],
+                 [540,856,56,3],[150,800,32,1],[300,720,64,4],[470,790,40,2],
+                 [96,812,24,0],[560,780,32,1]];
+
+const $ = (id) => document.getElementById(id);
+const cv = $("board"), cx = cv.getContext("2d");
+let policies = [], chosenId = null, live = false;
+
+function css(v){ return getComputedStyle(document.documentElement).getPropertyValue(v).trim(); }
+
+function draw(fruits, shortlist, chosen, dim){
+  const w = cv.width, h = cv.height;
+  cx.clearRect(0,0,w,h);
+  cx.fillStyle = css("--sunk"); cx.fillRect(0,0,w,h);
+
+  // the line the game ends at, and the floor: both are real game constants
+  cx.strokeStyle = css("--line-2"); cx.lineWidth = 2; cx.setLineDash([7,7]);
+  cx.beginPath(); cx.moveTo(0,LOSE_Y); cx.lineTo(w,LOSE_Y); cx.stroke();
+  cx.setLineDash([]);
+  cx.fillStyle = css("--line"); cx.fillRect(0,FLOOR_Y,w,h-FLOOR_Y);
+
+  // columns the policy weighed, and the one it took
+  if (shortlist && shortlist.length){
+    for (const c of shortlist){
+      const x = (c.column/39)*BOARD_W;
+      const taken = c.column === chosen;
+      cx.strokeStyle = taken ? css("--accent") : css("--line-2");
+      cx.lineWidth = taken ? 3 : 1.5;
+      cx.globalAlpha = taken ? .95 : .5;
+      cx.beginPath(); cx.moveTo(x,LOSE_Y); cx.lineTo(x,FLOOR_Y); cx.stroke();
+      cx.globalAlpha = 1;
+    }
+  }
+
+  cx.globalAlpha = dim ? .38 : 1;
+  for (const [fx,fy,fr,size] of fruits){
+    cx.beginPath(); cx.arc(fx,fy,fr,0,Math.PI*2);
+    cx.fillStyle = FRUIT[size] || "#888"; cx.fill();
+    cx.lineWidth = 2; cx.strokeStyle = "rgba(0,0,0,.16)"; cx.stroke();
+  }
+  cx.globalAlpha = 1;
+}
+
+function sparkline(vals){
+  const svg = $("spark");
+  if (!vals.length){ svg.innerHTML = ""; return; }
+  const max = Math.max(...vals, 1), min = 0, W = 300, H = 44, pad = 3;
+  const step = vals.length > 1 ? W/(vals.length-1) : 0;
+  const pts = vals.map((v,i)=>[i*step, H-pad-((v-min)/(max-min))*(H-pad*2)]);
+  const line = pts.map(p=>p[0].toFixed(1)+","+p[1].toFixed(1)).join(" ");
+  const area = `${pts[0][0]},${H} ${line} ${pts[pts.length-1][0]},${H}`;
+  const last = pts[pts.length-1];
+  svg.innerHTML =
+    `<polygon points="${area}" fill="${css('--accent')}" opacity="0.13"></polygon>` +
+    `<polyline points="${line}" fill="none" stroke="${css('--accent')}" stroke-width="2"
+       stroke-linejoin="round" stroke-linecap="round"></polyline>` +
+    `<circle cx="${last[0].toFixed(1)}" cy="${last[1].toFixed(1)}" r="3.2"
+       fill="${css('--accent')}"></circle>`;
+}
+
+function renderPicker(){
+  const kinds = [["reference","Reference"],["written","Hand-written"],["learned","Learned"]];
+  let html = "";
+  for (const [kind,label] of kinds){
+    const items = policies.filter(p=>p.kind===kind);
+    if (!items.length) continue;
+    html += `<div class="group-label">${label}</div>`;
+    for (const p of items){
+      const id = "p_"+p.id.replace(/[^a-z0-9]/gi,"_");
+      html += `<label class="opt" for="${id}">
+        <input type="radio" name="policy" id="${id}" value="${p.id}"
+               ${p.id===chosenId?"checked":""}>
+        <span class="opt-name">${p.name}</span>
+        <span class="opt-note">${p.note}</span></label>`;
+    }
+  }
+  $("picker").innerHTML = html;
+  $("picker").querySelectorAll("input").forEach(el=>{
+    el.addEventListener("change", ()=>{ chosenId = el.value; $("play").disabled = live; });
+  });
+}
+
+function renderShortlist(list){
+  if (!list || !list.length){
+    $("shortlist").innerHTML = live
+      ? `<div class="empty">This policy picks in one pass &mdash; no candidates to weigh.</div>`
+      : `<div class="empty">Policies that simulate their moves list the columns they weighed, and what each one was worth.</div>`;
+    return;
+  }
+  const hasGain = "gained" in list[0], hasSpread = "spread" in list[0];
+  let html = `<table><thead><tr><th>Column</th><th>Value</th>`
+    + (hasGain?`<th>Pts</th>`:``) + (hasSpread?`<th>Spread</th>`:``) + `</tr></thead><tbody>`;
+  const best = list.reduce((a,b)=>b.value>a.value?b:a, list[0]);
+  for (const c of list){
+    html += `<tr class="${c===best?"taken":""}"><td>${c.column}</td><td>${c.value}</td>`
+      + (hasGain?`<td>${c.gained||0}</td>`:``)
+      + (hasSpread?`<td>${c.spread}</td>`:``) + `</tr>`;
+  }
+  $("shortlist").innerHTML = html + `</tbody></table>`;
+}
+
+async function poll(){
+  try{
+    const s = await (await fetch("/api/state")).json();
+    live = s.running;
+    $("play").disabled = live || !chosenId;
+    $("stop").disabled = !live;
+    // Keep the picker honest about what is actually playing.
+    if (live && s.policy && s.policy !== chosenId){
+      chosenId = s.policy; renderPicker();
+    }
+    $("pill").className = "state-pill " + (live?"state-live":"state-idle");
+    $("pill").innerHTML = `<span class="dot"></span>${live?"playing":"idle"}`;
+    if (live || s.fruits.length){
+      $("score").textContent = s.score.toLocaleString();
+      $("step").textContent = s.step;
+      $("ep").textContent = s.episode;
+      $("best").textContent = s.best.toLocaleString();
+      $("think").textContent = s.thinking_ms ? s.thinking_ms + " ms to choose" : "";
+      const named = policies.find(p=>p.id===s.policy);
+      $("stageNote").textContent = named ? named.name : (s.policy || "");
+      draw(s.fruits, s.shortlist, s.chosen, false);
+      renderShortlist(s.shortlist);
+      sparkline(s.history);
+    }
+    $("err").innerHTML = s.error ? `<div class="err">${s.error}</div>` : "";
+  }catch(e){ /* server not up yet; keep polling */ }
+  setTimeout(poll, 220);
+}
+
+$("play").addEventListener("click", async ()=>{
+  if (!chosenId) return;
+  $("play").disabled = true;
+  await fetch("/api/start",{method:"POST",headers:{"Content-Type":"application/json"},
+    body:JSON.stringify({policy:chosenId})});
+});
+$("stop").addEventListener("click", async ()=>{
+  $("stop").disabled = true;
+  await fetch("/api/stop",{method:"POST"});
+});
+
+(async function init(){
+  draw(EXAMPLE, null, null, true);
+  try{
+    policies = await (await fetch("/api/policies")).json();
+    const preferred = policies.find(p=>p.id==="layered+rollout") || policies[0];
+    chosenId = preferred ? preferred.id : null;
+    renderPicker();
+    $("play").disabled = !chosenId;
+  }catch(e){
+    $("picker").innerHTML = `<div class="err">Could not reach the server.</div>`;
+  }
+  poll();
+})();
+</script>
+</body>
+</html>
