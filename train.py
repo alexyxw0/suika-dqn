@@ -112,6 +112,51 @@ def build_column_model(grid_shape=(30, 20, 2), vector_len=15,
     return model
 
 
+def build_afterstate_model(grid_shape=(30, 20, 2), vector_len=15, lr=3e-4,
+                          seed=None):
+    """How good is this board? One number.
+
+    The shape every strong Tetris agent uses, and it failed here once already —
+    1794 against the cloned network's 2449. Two things were wrong with that
+    attempt and only one of them was the architecture.
+
+    The boards it was trained on were geometric constructions, not physics:
+    a landing point computed as "straight down until first overlap", a merge
+    resolved by averaging two positions, and no gravity afterwards. Measured
+    against the real game that construction got the *merge outcome itself*
+    wrong 27% of the time. `Game.rollout` gets it wrong 3%.
+
+    The other problem stands regardless and is handled at inference rather than
+    here: a value function trained on the board actually reached, then asked to
+    rank forty, is extrapolating on thirty-nine of them, and argmax selects
+    whichever it overrates. See `scripts/eval_value.py`.
+
+    Flatten rather than pool: how high the pile is and where the gaps sit is
+    what decides a board, and average pooling discards the vertical structure.
+    """
+    init = (tf.keras.initializers.GlorotUniform(seed=seed)
+            if seed is not None else "glorot_uniform")
+    grid_in = layers.Input(shape=grid_shape, name="grid")
+    vector_in = layers.Input(shape=(vector_len,), name="vector")
+
+    g = layers.Conv2D(32, 3, padding="same", activation="relu",
+                      kernel_initializer=init)(grid_in)
+    g = layers.Conv2D(64, 3, strides=2, padding="same", activation="relu",
+                      kernel_initializer=init)(g)
+    g = layers.Conv2D(64, 3, strides=2, padding="same", activation="relu",
+                      kernel_initializer=init)(g)
+    g = layers.Flatten()(g)
+
+    v = layers.Dense(64, activation="relu", kernel_initializer=init)(vector_in)
+    x = layers.Concatenate()([g, v])
+    x = layers.Dense(128, activation="relu", kernel_initializer=init)(x)
+    out = layers.Dense(1, name="value", kernel_initializer=init)(x)
+
+    model = models.Model(inputs=[grid_in, vector_in], outputs=out)
+    model.compile(optimizer=tf.keras.optimizers.Adam(lr), loss="mse")
+    return model
+
+
 def make_joint_train_step(model, num_actions: int, demo_weight: float):
     """A gradient step that fits returns *and* keeps imitating.
 

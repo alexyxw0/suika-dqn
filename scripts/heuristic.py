@@ -62,6 +62,42 @@ READ_STATE = """
           score: Game.score, status: Game.stateIndex};
 """
 
+# Wait for the board to stop moving, then read it — in one round trip.
+#
+# The environment already waits for the same predicate before returning an
+# observation, but its wait is capped and the cap fires about 3% of the time,
+# so roughly nine drops an episode were decided on a board that was still
+# settling. Every landing estimate in this file assumes the fruit it reasons
+# about is at rest; a fruit still in motion is at a position it is about to
+# leave, and the whole placement is computed against a board that will not
+# exist by the time the drop lands.
+#
+# Reports whether it had to wait, so the cost of the guarantee is visible.
+SETTLED_READ_STATE = """
+  const maxMs = arguments[0], done = arguments[1];
+  const started = Date.now();
+  (function check() {
+    const waited = Date.now() - started;
+    const calm = window.Game.settled();
+    if (calm || waited >= maxMs) {
+      const fruits = Composite.allBodies(engine.world)
+        .filter(b => !b.isStatic && b.circleRadius && b.sizeIndex !== undefined)
+        .map(b => [b.position.x, b.position.y, b.circleRadius, b.sizeIndex]);
+      return done({fruits, cur: Game.currentFruitSize,
+                   next: Game.nextFruitSize, score: Game.score,
+                   status: Game.stateIndex, waited: waited, settled: calm});
+    }
+    setTimeout(check, 1);
+  })();
+"""
+
+
+def read_state(env, settle_ms=0):
+    """The board, optionally after waiting for it to come to rest."""
+    if not settle_ms:
+        return env.driver.execute_script(READ_STATE)
+    return env.driver.execute_async_script(SETTLED_READ_STATE, int(settle_ms))
+
 
 def landing_y(x, r, fruits):
     """Where a fruit of radius r dropped at x comes to rest.
@@ -256,6 +292,11 @@ def main() -> int:
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--episodes", type=int, default=15)
     ap.add_argument("--actions", type=int, default=40)
+    ap.add_argument("--settle-wait", type=int, default=1000, metavar="MS",
+                    help="wait up to this long for the board to stop moving "
+                         "before scoring candidates. Every landing estimate "
+                         "assumes the fruit it reasons about is at rest. "
+                         "0 reads immediately, as earlier runs did")
     ap.add_argument("--rollout", type=int, default=0, metavar="K",
                     help="simulate the top K candidates with the real physics "
                          "and choose on the settled board rather than on an "
@@ -296,6 +337,7 @@ def main() -> int:
     env = make_env()
     bins = np.linspace(0.0, 1.0, args.actions)
     scores, lengths, partials = [], [], []
+    waited_total = waited_n = drops = stale = 0
     crashes = 0
     ep = 0
     attempts = 0
@@ -310,7 +352,11 @@ def main() -> int:
                     if args.random:
                         action = np.random.randint(args.actions)
                     else:
-                        state = env.driver.execute_script(READ_STATE)
+                        state = read_state(env, args.settle_wait)
+                        if state.get("waited") is not None:
+                            waited_total += state["waited"]
+                            waited_n += state["waited"] > 0
+                            stale += not state["settled"]
                         if args.rollout:
                             action = choose_by_rollout(
                                 env, state, args.actions, weights,
@@ -321,6 +367,7 @@ def main() -> int:
                         np.array([bins[action]], dtype=np.float32))
                     score = info["score"]
                     steps += 1
+                    drops += 1
                     if done or trunc:
                         break
             except browser_dead as exc:
@@ -375,6 +422,10 @@ def main() -> int:
         print(f"  {crashes} tab crash(es) replayed;"
               f" mean including their partial scores"
               f" {statistics.mean(withp):.0f} (lower bound, n={len(withp)})")
+    if args.settle_wait and drops:
+        print(f"  board was still moving on {100*waited_n/drops:.1f}% of "
+              f"drops ({waited_total/max(waited_n,1):.0f} ms of extra wait "
+              f"each); {100*stale/drops:.1f}% never settled within the cap")
     print("  reference: random 1424 | DQN from scratch 1455 | cloned 2449 | greedy 2497 | layered 2696")
     return 0
 

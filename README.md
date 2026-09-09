@@ -4,23 +4,12 @@ A reinforcement-learning agent for [Suika](https://suikagame.com/), the
 fruit-merging puzzle game, trained against a browser-based Gymnasium
 environment driven through Selenium.
 
-The short version: a Q-network trained from scratch never beat random play. It
-took a hand-written baseline to discover why — the network's head gave it no
-way to *learn* a value per board column — and behaviour cloning from that
-baseline to get an agent that plays.
+The agent learns from the game's own state rather than pixels, is bootstrapped
+by imitating a hand-written policy, and chooses its move by simulating each
+candidate drop in the game's physics engine before committing to one.
 
-| policy | mean score | se | n |
-|---|---|---|---|
-| random | 1424 | 118 | 10 |
-| DQN from scratch, original head | 1455 | 79 | 16 |
-| **DQN cloned into a column-aligned head** | **2449** | 72 | 45 |
-| hand-written policy (the teacher) | 2696 | 68 | 62 |
-| the same policy, simulating its candidate drops | **2826** | 80 | 30 |
-
-`runs/FINDINGS.md` has the full record, including the things that did not work
-and what they cost.
-
-![anchored versus plain TD fine-tuning](runs/finetune.png)
+`runs/FINDINGS.md` records every measurement, including the approaches that did
+not work.
 
 **This repo contains only my own work.** The environment belongs to
 [`edwhu/suika_rl`](https://github.com/edwhu/suika_rl), which ships no licence,
@@ -35,6 +24,8 @@ fresh clone instead of vendoring it.
 
 ## Setup
 
+Requires Chrome and chromedriver — the environment drives a real browser.
+
 ```bash
 git clone https://github.com/edwhu/suika_rl.git
 cd suika_rl && pip install -e . && cd ..
@@ -43,11 +34,15 @@ export PYTHONPATH=$PWD/suika_rl
 pip install -r requirements.txt
 ```
 
-Requires Chrome and chromedriver — the environment drives a real browser.
+The environment is never edited in place. It is a clean clone plus a patch, so
+the working copy is reproducible rather than precious — which matters, because
+the one used while writing this lived in `/tmp` and was cleared twice.
+
+### Checking the setup
 
 ```bash
-./scripts/verify_patch.sh          # clones upstream, applies, compiles, imports
-python -m pytest tests/ -q         # 96 tests, no browser needed
+PYTHON=$(which python) ./scripts/verify_patch.sh   # clone, apply, compile, import
+python -m pytest tests/ -q                         # 139 tests, no browser needed
 ```
 
 `verify_patch.sh` imports the patched module rather than stopping at
@@ -56,18 +51,47 @@ version of the patch passed it and produced a file with two statements spliced
 onto one line: BSD `diff` had emitted a `\ No newline at end of file` marker
 after every hunk.
 
-## Running it
-
-The pipeline that produced the 2449 agent:
+Four more checks. The first three drive a browser; the last does not:
 
 ```bash
-python scripts/heuristic.py --episodes 30 --policy layered --rollout 5   # the teacher
-python scripts/collect_demos.py --episodes 90                # ~24k labelled boards
-python scripts/pretrain.py                                   # clone it, ~5 min
+python scripts/check_afterstate.py    # board encoder matches the page exactly
+python scripts/check_rollout.py       # a simulated drop matches the real one
+python scripts/check_seeding.py       # a seed fixes the fruit sequence
+python scripts/check_train_step.py    # compiled gradient step is exact, and faster
+```
+
+They exist because each covers something that fails silently rather than
+loudly — an encoder off by half a cell, a simulation that disagrees with the
+game, a seed that is accepted and ignored.
+
+## The pipeline
+
+Each stage writes into `runs/` and the next one reads it.
+
+**1. Measure the ends of the scale.** A hand-written policy and random play,
+so any later number has something to mean.
+
+```bash
+python scripts/heuristic.py --episodes 30 --policy layered --rollout 5
+python scripts/heuristic.py --episodes 30 --random
+```
+
+**2. Record demonstrations.** The hand-written policy plays; every board it
+reaches is paired with the column it chose.
+
+```bash
+python scripts/collect_demos.py --episodes 90        # -> runs/demos.npz
+```
+
+**3. Clone it.** Supervised fitting of the Q-network to those choices, which is
+how the agent gets off the floor — learning from scratch does not work here.
+
+```bash
+python scripts/pretrain.py                           # -> runs/bc.h5
 python scripts/eval_policy.py --checkpoint runs/bc.h5 --episodes 25
 ```
 
-Reinforcement learning on top, starting from those weights:
+**4. Reinforcement learning from there.**
 
 ```bash
 python train.py --resume --checkpoint runs/bc.h5 \
@@ -76,70 +100,51 @@ python train.py --resume --checkpoint runs/bc.h5 \
 ```
 
 `--demos` is not optional in practice: without it, TD fine-tuning forgets the
-cloned policy and falls to ~1730. It is also, on the evidence, not an
-improvement — see the honest limits below.
+cloned policy within fifty episodes.
+
+**Or, the board-value route.** Instead of one network emitting a value per
+column, simulate each candidate drop and score the board it produces.
+
+```bash
+python scripts/collect_afterstates.py --episodes 60  # -> runs/afterstates.npz
+python scripts/fit_value.py --members 4              # -> runs/value/
+python scripts/eval_value.py --episodes 20
+```
 
 ## How it works
 
-**Observation.** The board rasterised into a 30x20x2 grid (fruit size, radius)
+**Observation.** The board rasterised into a 30×20×2 grid (fruit size, radius)
 plus a 15-vector: how many of each size are live, what is in hand, what is
-next, and how full the board is. All of it read straight out of the physics
-engine rather than from pixels.
+next, how full the board is. Read straight out of the physics engine.
 
-**Network.** A convolutional stack that never strides the board's width. Height
-is reduced away, leaving one feature vector per board column; the global vector
-is broadcast onto every column; a width-1 convolution then scores every column
-with *the same* weights, so a merge pattern learned at one position applies at
-all of them.
-
-This is the part that mattered. The original head halved the width twice and
-flattened, so position survived only as an index into a 2560-vector, and each
-of the 40 outputs had its own parameters — nothing learned about one column
-transferred to the next. Handed perfect demonstrations it reaches a training
-loss of 0.64 where this head reaches 0.246: it underfits, rather than
-overfitting, which is why regularising it did not help.
+**Network.** A convolutional stack that never strides the board's width.
+Height is reduced away, leaving one feature vector per board column; the global
+vector is broadcast onto every column; a width-1 convolution scores every
+column with the same weights, so a pattern learned at one position applies at
+all of them. The action is *which column*, so the output stays indexed by board
+position.
 
 **Simulated drops.** `Game.rollout` builds a scratch Matter.js world from the
 live board, drops a candidate into it, and steps until nothing moves — the real
-merge rule included. The policy shortlists with a closed-form landing estimate
-and then decides on boards the physics actually produced. Verified against the
-game by simulating a drop and then playing it: the score is right 90% of the
-time and the median fruit lands 1.7 px from where it was predicted, against a
-24 px smallest radius.
+merge rule included. The policy shortlists with a cheap closed-form landing
+estimate, then decides on boards the physics actually produced.
 
 **Environment.** The upstream step took 640 ms, of which 500 was a fixed
-`time.sleep(0.5)` after every drop. The patch replaces that with a real settle
-predicate evaluated inside the page, raises the physics multiplier to 25x,
-mutes audio, renders only on demand, and adds a feature observation mode. The
-step is now **88 ms**, of which 81 is genuinely waiting for the board to stop
-moving.
-
-## Honest limits
-
-- **The agent does not beat its teacher.** 2449 against 2696. Behaviour cloning
-  fits a teacher's opinion, so it is capped by that teacher by construction.
-- **Reinforcement learning adds nothing measurable** on top of cloning: +61 ±
-  128 over 98 near-greedy episodes, flat across every window. The environment
-  yields roughly 100k steps overnight, which is enough to imitate a policy and
-  not enough to improve on one.
-- **Double DQN, duelling, n-step returns, the terminal penalty and the reward
-  scale were never ablated individually.** They are standard and cheap, and the
-  bugs fixed in them were real correctness bugs, but this repo does not claim a
-  measured benefit for any of them.
-- **The agent has not been re-cloned from the rollout teacher.** Simulating
-  the candidate drops raised the teacher from 2582 to 2826 (`p = 0.037`), but
-  the 2449 agent was distilled from the older, estimate-based one. That
-  re-clone is the obvious next run and has not been done.
+`time.sleep(0.5)` after every drop. The patch replaces that with a settle
+predicate evaluated inside the page, raises the physics multiplier to 25×,
+mutes audio, renders on demand, adds a feature observation mode, and makes the
+fruit sequence seedable. The step is now **88 ms**, of which 81 is genuinely
+waiting for the board to stop moving.
 
 ## Layout
 
 ```
 train.py              RL loop: replay, n-step targets, compiled gradient step
 agent.py              replay buffer, n-step returns, TD targets, crash recovery
+afterstate.py         encodes a candidate board the way the page does
 scripts/heuristic.py  the hand-written policy, and the random baseline
-scripts/collect_demos.py, pretrain.py, eval_policy.py
-scripts/check_train_step.py, check_seeding.py, verify_patch.sh
-tests/                96 tests, pure numpy, no browser required
+scripts/              demonstrations, cloning, evaluation, plotting, checks
+tests/                139 tests, pure numpy, no browser required
 runs/FINDINGS.md      every measurement, including the failures
 env-fixes.patch       against a clean upstream clone
 ```

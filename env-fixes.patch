@@ -1,5 +1,5 @@
 diff --git a/suika_env/suika-game/index.js b/suika_env/suika-game/index.js
-index af39b2d..7fcb204 100644
+index af39b2d..8e75a76 100644
 --- a/suika_env/suika-game/index.js
 +++ b/suika_env/suika-game/index.js
 @@ -8,12 +8,34 @@ function mulberry32(a) {
@@ -63,7 +63,7 @@ index af39b2d..7fcb204 100644
  		click: new Audio('./assets/click.mp3'),
  		pop0: new Audio('./assets/pop0.mp3'),
  		pop1: new Audio('./assets/pop1.mp3'),
-@@ -120,9 +150,145 @@ const Game = {
+@@ -120,9 +150,154 @@ const Game = {
  		localStorage.setItem('suika-game-cache', JSON.stringify(Game.cache));
  	},
  
@@ -81,23 +81,62 @@ index af39b2d..7fcb204 100644
 +		// What actually happens if this fruit is dropped here — simulated, not
 +		// estimated.
 +		//
-+		// The policy that scored 2696 works out where a fruit lands in closed
-+		// form: straight down, stopping at the first thing it overlaps. That
-+		// ignores roll, ignores the support being pushed aside, and ignores
-+		// merges resolving mid-fall. Every downstream failure inherited it — the
-+		// next-fruit lookahead compounded two steps of it, the afterstate value
-+		// network was trained on boards it invented, and weight fitting could
-+		// only re-weight terms built on top of it.
++		// The closed-form alternative works out where a fruit lands by dropping
++		// it straight down to the first overlap, which ignores roll, ignores the
++		// support being pushed aside, and ignores merges resolving mid-fall.
++		// Measured against this game it gets the merge outcome wrong 27% of the
++		// time; this gets it wrong 3%.
 +		//
-+		// A scratch engine is used rather than saving and restoring this one.
-+		// Matter.js has no snapshot, and a merge creates and destroys bodies, so
-+		// an undo would have to track composition changes. Rebuilding ~20 circles
-+		// is cheaper than getting that right.
-+		//
-+		// Every candidate is scored in one call: forty round trips to the driver
-+		// would cost more than the physics does.
++		// One scratch engine, reused. The first version built a fresh engine per
++		// candidate and attached a collision handler to each: `Engine.clear`
++		// empties the world but leaves the engine and its listeners for the
++		// collector, and at five per drop that is ~19,000 of them across fifteen
++		// episodes. The machine started swapping and episodes went from 250
++		// seconds to 4,000. Restarting the browser fixed it, which is what gave
++		// the leak away.
++		if (!Game._sim) {
++			Game._sim = Engine.create();
++			Game._simTally = { gained: 0, lost: false };
++			const wall = { isStatic: true, ...friction };
++			Composite.add(Game._sim.world, [
++				Bodies.rectangle(-(wallPad / 2), Game.height / 2,
++					wallPad, Game.height, wall),
++				Bodies.rectangle(Game.width + (wallPad / 2), Game.height / 2,
++					wallPad, Game.height, wall),
++				Bodies.rectangle(Game.width / 2,
++					Game.height + (wallPad / 2) - statusBarHeight,
++					Game.width, wallPad, wall),
++			]);
++			// Attached once. The tally it writes into is reset per candidate.
++			Events.on(Game._sim, 'collisionStart', function (e) {
++				const big = Game.fruitSizes[Game.fruitSizes.length - 1].radius;
++				for (let i = 0; i < e.pairs.length; i++) {
++					const { bodyA, bodyB } = e.pairs[i];
++					if (bodyA.isStatic || bodyB.isStatic) continue;
++					if (bodyA.sizeIndex === undefined) continue;
++					if (bodyB.sizeIndex === undefined) continue;
++					if (bodyA.position.y + bodyA.circleRadius < loseHeight
++						|| bodyB.position.y + bodyB.circleRadius < loseHeight) {
++						Game._simTally.lost = true;
++					}
++					if (bodyA.sizeIndex !== bodyB.sizeIndex) continue;
++					let newSize = bodyA.sizeIndex + 1;
++					if (bodyA.circleRadius >= big) newSize = 0;
++					Game._simTally.gained +=
++						Game.fruitSizes[bodyA.sizeIndex].scoreValue;
++					const mx = (bodyA.position.x + bodyB.position.x) / 2;
++					const my = (bodyA.position.y + bodyB.position.y) / 2;
++					Composite.remove(Game._sim.world, [bodyA, bodyB]);
++					const nb = Bodies.circle(mx, my,
++						Game.fruitSizes[newSize].radius, { ...friction });
++					nb.sizeIndex = newSize;
++					Composite.add(Game._sim.world, nb);
++				}
++			});
++		}
++
++		const sim = Game._sim;
 +		const results = [];
-+		const biggest = Game.fruitSizes[Game.fruitSizes.length - 1].radius;
 +		const cap = maxTicks || 600;
 +
 +		// Snapshot the live board once; every candidate starts from it.
@@ -110,18 +149,8 @@ index af39b2d..7fcb204 100644
 +			}));
 +
 +		for (let k = 0; k < xs.length; k++) {
-+			const sim = Engine.create();
-+			const wall = { isStatic: true, ...friction };
-+			Composite.add(sim.world, [
-+				Bodies.rectangle(-(wallPad / 2), Game.height / 2,
-+					wallPad, Game.height, wall),
-+				Bodies.rectangle(Game.width + (wallPad / 2), Game.height / 2,
-+					wallPad, Game.height, wall),
-+				Bodies.rectangle(Game.width / 2,
-+					Game.height + (wallPad / 2) - statusBarHeight,
-+					Game.width, wallPad, wall),
-+			]);
-+
++			// true keeps the three walls, so they are built once ever.
++			Composite.clear(sim.world, true);
 +			for (const f of board) {
 +				const c = Bodies.circle(f.x, f.y, f.r, { ...friction });
 +				c.sizeIndex = f.s;
@@ -130,39 +159,13 @@ index af39b2d..7fcb204 100644
 +				Body.setAngularVelocity(c, f.av);
 +				Composite.add(sim.world, c);
 +			}
-+
 +			const drop = Bodies.circle(xs[k], 0,
 +				Game.fruitSizes[sizeIndex].radius, { ...friction });
 +			drop.sizeIndex = sizeIndex;
 +			Composite.add(sim.world, drop);
 +
-+			let gained = 0;
-+			let lost = false;
-+			// The same merge rule the real game runs, including the wrap from the
-+			// largest size back to the smallest and the lose condition.
-+			Events.on(sim, 'collisionStart', function (e) {
-+				for (let i = 0; i < e.pairs.length; i++) {
-+					const { bodyA, bodyB } = e.pairs[i];
-+					if (bodyA.isStatic || bodyB.isStatic) continue;
-+					if (bodyA.sizeIndex === undefined) continue;
-+					if (bodyB.sizeIndex === undefined) continue;
-+					if (bodyA.position.y + bodyA.circleRadius < loseHeight
-+						|| bodyB.position.y + bodyB.circleRadius < loseHeight) {
-+						lost = true;
-+					}
-+					if (bodyA.sizeIndex !== bodyB.sizeIndex) continue;
-+					let newSize = bodyA.sizeIndex + 1;
-+					if (bodyA.circleRadius >= biggest) newSize = 0;
-+					gained += Game.fruitSizes[bodyA.sizeIndex].scoreValue;
-+					const mx = (bodyA.position.x + bodyB.position.x) / 2;
-+					const my = (bodyA.position.y + bodyB.position.y) / 2;
-+					Composite.remove(sim.world, [bodyA, bodyB]);
-+					const nb = Bodies.circle(mx, my,
-+						Game.fruitSizes[newSize].radius, { ...friction });
-+					nb.sizeIndex = newSize;
-+					Composite.add(sim.world, nb);
-+				}
-+			});
++			Game._simTally.gained = 0;
++			Game._simTally.lost = false;
 +
 +			let ticks = 0;
 +			while (ticks < cap) {
@@ -184,9 +187,15 @@ index af39b2d..7fcb204 100644
 +					&& b.sizeIndex !== undefined)
 +				.map(b => [b.position.x, b.position.y, b.circleRadius,
 +					b.sizeIndex]);
-+			results.push({ fruits, gained, lost, ticks, settled: ticks < cap });
-+			Engine.clear(sim);
++			results.push({
++				fruits,
++				gained: Game._simTally.gained,
++				lost: Game._simTally.lost,
++				ticks,
++				settled: ticks < cap,
++			});
 +		}
++		Composite.clear(sim.world, true);
 +		return results;
 +	},
 +
@@ -211,7 +220,7 @@ index af39b2d..7fcb204 100644
  
  		Composite.add(engine.world, menuStatics);
  
-@@ -298,7 +464,7 @@ const Game = {
+@@ -298,7 +473,7 @@ const Game = {
  				Composite.add(engine.world, Game.elements.previewBall);
  				Game.stateIndex = GameStates.READY;
  			}
@@ -221,7 +230,7 @@ index af39b2d..7fcb204 100644
  }
  
 diff --git a/suika_env/suika_browser_env.py b/suika_env/suika_browser_env.py
-index 97bbac6..74f646c 100644
+index 97bbac6..eead1f0 100644
 --- a/suika_env/suika_browser_env.py
 +++ b/suika_env/suika_browser_env.py
 @@ -2,18 +2,24 @@ from selenium import webdriver
@@ -253,12 +262,31 @@ index 97bbac6..74f646c 100644
          # Check if port is already in use
          self.server = None
          if not self.is_port_in_use(port):
-@@ -21,79 +27,243 @@ class SuikaBrowserEnv(gymnasium.Env):
+@@ -21,79 +27,262 @@ class SuikaBrowserEnv(gymnasium.Env):
              script_dir = os.path.dirname(os.path.realpath(__file__))
              # Construct the absolute path of the suika-game directory
              suika_game_dir = os.path.join(script_dir, 'suika-game')
 -            self.server = subprocess.Popen(["python", "-m", "http.server", str(port)], cwd=suika_game_dir, stdout=subprocess.DEVNULL, stderr=subprocess.STDOUT)
 +            self.server = subprocess.Popen(["python3", "-m", "http.server", str(port)], cwd=suika_game_dir, stdout=subprocess.DEVNULL, stderr=subprocess.STDOUT)
++            # Wait for it to bind. Navigating to a port that is not listening
++            # yet gets a blank page, and the failure then surfaces much later
++            # as "no such element: start-game-button", which reads like a
++            # broken page rather than a race. It cost a whole evaluation arm
++            # once, on a machine that was swapping and lost the race it usually
++            # wins.
++            deadline = time.time() + 15.0
++            while time.time() < deadline:
++                if self.is_port_in_use(port):
++                    break
++                if self.server.poll() is not None:
++                    raise RuntimeError(
++                        f"the page server exited immediately on port {port}; "
++                        f"is something else using it?")
++                time.sleep(0.05)
++            else:
++                raise RuntimeError(
++                    f"the page server did not start listening on port {port} "
++                    f"within 15s")
  
          opts = webdriver.ChromeOptions()
 -        opts.add_argument("--width=1024")
@@ -538,7 +566,7 @@ index 97bbac6..74f646c 100644
          score = obs['score'].item()
          info['score'] = score
          reward += score - self.score
-@@ -101,6 +271,34 @@ class SuikaBrowserEnv(gymnasium.Env):
+@@ -101,6 +290,34 @@ class SuikaBrowserEnv(gymnasium.Env):
  
          return obs, reward, terminal, truncated, info
  
