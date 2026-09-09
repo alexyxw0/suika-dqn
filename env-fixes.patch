@@ -1,5 +1,5 @@
 diff --git a/suika_env/suika-game/index.js b/suika_env/suika-game/index.js
-index af39b2d..8e75a76 100644
+index af39b2d..10b7bea 100644
 --- a/suika_env/suika-game/index.js
 +++ b/suika_env/suika-game/index.js
 @@ -8,12 +8,34 @@ function mulberry32(a) {
@@ -63,7 +63,7 @@ index af39b2d..8e75a76 100644
  		click: new Audio('./assets/click.mp3'),
  		pop0: new Audio('./assets/pop0.mp3'),
  		pop1: new Audio('./assets/pop1.mp3'),
-@@ -120,9 +150,154 @@ const Game = {
+@@ -120,9 +150,164 @@ const Game = {
  		localStorage.setItem('suika-game-cache', JSON.stringify(Game.cache));
  	},
  
@@ -77,7 +77,7 @@ index af39b2d..8e75a76 100644
 +		Render.world(render);
 +	},
 +
-+	rollout: function (xs, sizeIndex, maxTicks) {
++	rollout: function (xs, sizeIndex, maxTicks, boardOverride) {
 +		// What actually happens if this fruit is dropped here — simulated, not
 +		// estimated.
 +		//
@@ -139,14 +139,24 @@ index af39b2d..8e75a76 100644
 +		const results = [];
 +		const cap = maxTicks || 600;
 +
-+		// Snapshot the live board once; every candidate starts from it.
-+		const board = Composite.allBodies(engine.world)
-+			.filter(b => !b.isStatic && b.circleRadius && b.sizeIndex !== undefined)
-+			.map(b => ({
-+				x: b.position.x, y: b.position.y, r: b.circleRadius,
-+				s: b.sizeIndex, vx: b.velocity.x, vy: b.velocity.y,
-+				a: b.angle, av: b.angularVelocity,
-+			}));
++		// Snapshot the live board once; every candidate starts from it. A board
++		// can also be supplied instead, as [x, y, r, sizeIndex] rows, which is
++		// what lets a position from earlier in the game be replayed — the
++		// dashboard's timeline uses it to simulate candidates from a past state
++		// rather than only the one on screen now. A supplied board carries no
++		// velocities, which is correct: those states were recorded at rest.
++		const board = boardOverride
++			? boardOverride.map(f => ({
++				x: f[0], y: f[1], r: f[2], s: f[3],
++				vx: 0, vy: 0, a: 0, av: 0,
++			}))
++			: Composite.allBodies(engine.world)
++				.filter(b => !b.isStatic && b.circleRadius && b.sizeIndex !== undefined)
++				.map(b => ({
++					x: b.position.x, y: b.position.y, r: b.circleRadius,
++					s: b.sizeIndex, vx: b.velocity.x, vy: b.velocity.y,
++					a: b.angle, av: b.angularVelocity,
++				}));
 +
 +		for (let k = 0; k < xs.length; k++) {
 +			// true keeps the three walls, so they are built once ever.
@@ -220,7 +230,7 @@ index af39b2d..8e75a76 100644
  
  		Composite.add(engine.world, menuStatics);
  
-@@ -298,7 +473,7 @@ const Game = {
+@@ -298,7 +483,7 @@ const Game = {
  				Composite.add(engine.world, Game.elements.previewBall);
  				Game.stateIndex = GameStates.READY;
  			}

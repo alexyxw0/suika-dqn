@@ -49,6 +49,25 @@ h1{font-size:21px; font-weight:700; letter-spacing:-.015em; margin:0}
 
 .stage{background:var(--surface); border:1px solid var(--line); border-radius:var(--radius); padding:14px}
 canvas{display:block; width:100%; height:auto; border-radius:6px; background:var(--sunk)}
+.inhand{display:flex; align-items:center; gap:22px; padding:2px 4px 12px}
+.hand-slot{display:flex; align-items:center; gap:9px; min-width:0}
+.hand-text{display:flex; flex-direction:column; line-height:1.25; min-width:0}
+.hand-k{font-size:10px; letter-spacing:.08em; text-transform:uppercase; color:var(--ink-3)}
+.hand-v{font-family:var(--font-num); font-size:12px; color:var(--ink-2);
+  font-variant-numeric:tabular-nums; white-space:nowrap}
+.hand-spacer{flex:1}
+.timeline{margin-top:11px}
+#scrub{width:100%; accent-color:var(--accent); cursor:pointer}
+#scrub:disabled{cursor:default; opacity:.4}
+#scrub:focus-visible{outline:2px solid var(--accent); outline-offset:3px}
+.tl-foot{display:flex; justify-content:space-between; align-items:center; gap:12px; flex-wrap:wrap;
+  margin-top:7px; color:var(--ink-3); font-size:12px}
+.ghost{background:transparent; border:1px solid var(--line-2); color:var(--ink-2);
+  padding:4px 11px; font-size:12px; border-radius:6px}
+.ghost:hover{border-color:var(--accent); color:var(--accent)}
+tr.cand{cursor:pointer}
+tr.cand:hover td{color:var(--accent)}
+tr.simmed td{color:var(--accent); font-weight:600}
 .stage-foot{display:flex; justify-content:space-between; align-items:center; gap:10px;
   margin-top:10px; color:var(--ink-3); font-size:12px}
 .hint{font-family:var(--font-num); font-size:11.5px}
@@ -110,6 +129,12 @@ td:first-child{text-align:left}
 tr.taken td{color:var(--accent); font-weight:600}
 .empty{color:var(--ink-3); font-size:12.5px; padding:2px 0}
 .err{color:var(--bad); font-size:12.5px; font-family:var(--font-num); padding:2px 0; word-break:break-word}
+.now{margin-left:8px; font-family:var(--font-num); font-size:10px; font-weight:600;
+  letter-spacing:.06em; text-transform:uppercase; color:var(--accent);
+  border:1px solid var(--accent); border-radius:99px; padding:1px 7px; vertical-align:2px}
+.banner{background:var(--bad); color:#fff; border-radius:var(--radius); padding:11px 15px;
+  margin-bottom:18px; font-family:var(--font-num); font-size:12.5px; line-height:1.5;
+  word-break:break-word}
 .spark{display:block; width:100%; height:44px; margin-top:4px}
 </style>
 </head>
@@ -120,12 +145,29 @@ tr.taken td{color:var(--accent); font-weight:600}
     <span class="sub">watching the board the policy actually reasons about &mdash; fruit positions straight from the physics engine</span>
   </header>
 
+  <div class="banner" id="banner" role="alert" hidden></div>
+
   <div class="grid">
     <div class="stage">
+      <div class="inhand">
+        <div class="hand-slot">
+          <svg id="curFruit" viewBox="0 0 44 44" width="40" height="40" aria-label="fruit in hand"></svg>
+          <span class="hand-text"><span class="hand-k">In hand</span>
+            <span class="hand-v" id="curVal">&mdash;</span></span></div>
+        <div class="hand-slot">
+          <svg id="nextFruit" viewBox="0 0 44 44" width="40" height="40" aria-label="next fruit"></svg>
+          <span class="hand-text"><span class="hand-k">Next</span>
+            <span class="hand-v" id="nextVal">&mdash;</span></span></div>
+      </div>
       <canvas id="board" width="640" height="960" aria-label="Suika board"></canvas>
-      <div class="stage-foot">
-        <span id="stageNote">example board &mdash; choose a policy and press Play</span>
-        <span class="hint" id="think"></span>
+      <div class="timeline">
+        <input type="range" id="scrub" min="0" max="0" value="0" step="1"
+               aria-label="drop in this episode" disabled>
+        <div class="tl-foot">
+          <span id="stageNote">example board &mdash; choose a policy and press Play</span>
+          <span class="hint" id="think"></span>
+          <button class="ghost" id="followBtn" hidden>Follow live</button>
+        </div>
       </div>
     </div>
 
@@ -150,7 +192,7 @@ tr.taken td{color:var(--accent); font-weight:600}
         <div class="panel-body">
           <div class="k" style="font-size:10.5px;letter-spacing:.07em;text-transform:uppercase;color:var(--ink-3)">Finished episodes</div>
           <svg class="spark" id="spark" viewBox="0 0 300 44" preserveAspectRatio="none" aria-label="score per finished episode"></svg>
-          <div id="err"></div>
+
         </div>
       </div>
 
@@ -174,9 +216,19 @@ const EXAMPLE = [[92,872,40,2],[196,880,32,1],[300,848,64,4],[430,872,40,2],
 
 const $ = (id) => document.getElementById(id);
 const cv = $("board"), cx = cv.getContext("2d");
-let policies = [], chosenId = null, live = false;
+let policies = [], chosenId = null, playingId = null, live = false;
+let following = true, frameCount = 0, viewing = null, ghost = null, simSeq = null;
+const SCORE_VALUE = [1,3,6,10,15,21,28,36,45,55,66];
 
 function css(v){ return getComputedStyle(document.documentElement).getPropertyValue(v).trim(); }
+
+function fruitChip(svg, size, label){
+  if (size === null || size === undefined){ svg.innerHTML = ""; label.textContent = "\u2014"; return; }
+  const r = 9 + size * 1.05;                 // readable, not to board scale
+  svg.innerHTML = `<circle cx="22" cy="22" r="${r.toFixed(1)}" fill="${FRUIT[size]}"
+    stroke="rgba(0,0,0,.18)" stroke-width="1.5"></circle>`;
+  label.textContent = `size ${size} \u00b7 ${SCORE_VALUE[size]} pts`.replace("size ","#");
+}
 
 function draw(fruits, shortlist, chosen, dim){
   const w = cv.width, h = cv.height;
@@ -202,13 +254,23 @@ function draw(fruits, shortlist, chosen, dim){
     }
   }
 
-  cx.globalAlpha = dim ? .38 : 1;
+  cx.globalAlpha = dim ? .38 : (ghost ? .3 : 1);
   for (const [fx,fy,fr,size] of fruits){
     cx.beginPath(); cx.arc(fx,fy,fr,0,Math.PI*2);
     cx.fillStyle = FRUIT[size] || "#888"; cx.fill();
     cx.lineWidth = 2; cx.strokeStyle = "rgba(0,0,0,.16)"; cx.stroke();
   }
   cx.globalAlpha = 1;
+
+  // Where the physics says this candidate actually ends up. Drawn over the
+  // faded present so the difference is what you see.
+  if (ghost){
+    for (const [fx,fy,fr,size] of ghost){
+      cx.beginPath(); cx.arc(fx,fy,fr,0,Math.PI*2);
+      cx.fillStyle = FRUIT[size] || "#888"; cx.fill();
+      cx.lineWidth = 2.5; cx.strokeStyle = css("--accent"); cx.stroke();
+    }
+  }
 }
 
 function sparkline(vals){
@@ -237,20 +299,21 @@ function renderPicker(){
     html += `<div class="group-label">${label}</div>`;
     for (const p of items){
       const id = "p_"+p.id.replace(/[^a-z0-9]/gi,"_");
+      const badge = p.id===playingId ? `<span class="now">playing</span>` : "";
       html += `<label class="opt" for="${id}">
         <input type="radio" name="policy" id="${id}" value="${p.id}"
                ${p.id===chosenId?"checked":""}>
-        <span class="opt-name">${p.name}</span>
+        <span class="opt-name">${p.name}${badge}</span>
         <span class="opt-note">${p.note}</span></label>`;
     }
   }
   $("picker").innerHTML = html;
   $("picker").querySelectorAll("input").forEach(el=>{
-    el.addEventListener("change", ()=>{ chosenId = el.value; $("play").disabled = live; });
+    el.addEventListener("change", ()=>{ chosenId = el.value; syncButtons(); });
   });
 }
 
-function renderShortlist(list){
+function renderShortlist(list, clickable){
   if (!list || !list.length){
     $("shortlist").innerHTML = live
       ? `<div class="empty">This policy picks in one pass &mdash; no candidates to weigh.</div>`
@@ -262,26 +325,98 @@ function renderShortlist(list){
     + (hasGain?`<th>Pts</th>`:``) + (hasSpread?`<th>Spread</th>`:``) + `</tr></thead><tbody>`;
   const best = list.reduce((a,b)=>b.value>a.value?b:a, list[0]);
   for (const c of list){
-    html += `<tr class="${c===best?"taken":""}"><td>${c.column}</td><td>${c.value}</td>`
+    const cls = [c===best?"taken":"", clickable?"cand":""].filter(Boolean).join(" ");
+    html += `<tr class="${cls}" data-col="${c.column}"><td>${c.column}</td><td>${c.value}</td>`
       + (hasGain?`<td>${c.gained||0}</td>`:``)
       + (hasSpread?`<td>${c.spread}</td>`:``) + `</tr>`;
   }
-  $("shortlist").innerHTML = html + `</tbody></table>`;
+  html += `</tbody></table>`;
+  if (clickable) html += `<div class="empty" id="simNote" style="margin-top:8px">
+    Click a column to replay it in the physics engine from this position.</div>`;
+  $("shortlist").innerHTML = html;
+  if (clickable){
+    $("shortlist").querySelectorAll("tr.cand").forEach(tr=>{
+      tr.addEventListener("click", ()=>{
+        $("shortlist").querySelectorAll("tr").forEach(x=>x.classList.remove("simmed"));
+        tr.classList.add("simmed");
+        simulate(parseInt(tr.dataset.col,10));
+      });
+    });
+  }
+}
+
+function syncButtons(){
+  const b = $("play");
+  const switching = live && chosenId && chosenId !== playingId;
+  b.textContent = switching ? "Switch to this" : "Play";
+  b.disabled = !chosenId || (live && !switching);
+  $("stop").disabled = !live;
+}
+
+function showFrame(f, note){
+  draw(f.fruits, f.shortlist, f.chosen, false);
+  fruitChip($("curFruit"), f.cur, $("curVal"));
+  fruitChip($("nextFruit"), f.next, $("nextVal"));
+  renderShortlist(f.shortlist, true);
+  $("stageNote").textContent = note;
+}
+
+async function viewFrame(i){
+  following = false; ghost = null; $("followBtn").hidden = false;
+  const f = await (await fetch("/api/frame/" + i)).json();
+  if (f.error) return;
+  viewing = { index: i, frame: f };
+  showFrame(f, `drop ${f.step} of episode ${f.episode} \u00b7 score ${f.score.toLocaleString()}`);
+}
+
+// Ask the physics what a column would have done from the position on screen.
+async function simulate(column){
+  if (!viewing) return;
+  const r = await fetch("/api/simulate", {method:"POST",
+    headers:{"Content-Type":"application/json"},
+    body: JSON.stringify({frame: viewing.index, columns:[column]})});
+  const body = await r.json();
+  if (!r.ok){ $("simNote").textContent = body.error || "could not simulate"; return; }
+  simSeq = body.id;
+  $("simNote").textContent = "simulating\u2026";
+  for (let i=0;i<60;i++){
+    await new Promise(res=>setTimeout(res,180));
+    const p = await fetch("/api/simulation/" + simSeq);
+    if (p.status === 202) continue;
+    const out = await p.json();
+    if (out.error){ $("simNote").textContent = out.error; return; }
+    const c = out.candidates[0];
+    ghost = c.fruits;
+    draw(viewing.frame.fruits, viewing.frame.shortlist, viewing.frame.chosen, false);
+    $("simNote").textContent =
+      `column ${c.column}: ${c.gained} pts, settles in ${c.ticks} ticks`
+      + (c.lost ? " \u2014 loses the game" : "");
+    return;
+  }
+  $("simNote").textContent = "the policy did not reach a pause to run it";
 }
 
 async function poll(){
   try{
     const s = await (await fetch("/api/state")).json();
     live = s.running;
-    $("play").disabled = live || !chosenId;
-    $("stop").disabled = !live;
-    // Keep the picker honest about what is actually playing.
-    if (live && s.policy && s.policy !== chosenId){
-      chosenId = s.policy; renderPicker();
-    }
+    // The selection belongs to the user. An earlier version re-pointed it at
+    // whatever was playing on every poll, which reverted any click within
+    // 220ms and rebuilt the picker underneath the pointer. What is playing is
+    // shown as a badge on its own row instead.
+    if (playingId !== s.policy){ playingId = s.policy; renderPicker(); }
     $("pill").className = "state-pill " + (live?"state-live":"state-idle");
-    $("pill").innerHTML = `<span class="dot"></span>${live?"playing":"idle"}`;
-    if (live || s.fruits.length){
+    $("pill").innerHTML = `<span class="dot"></span>${s.status || (live?"playing":"idle")}`;
+    syncButtons();
+    frameCount = s.frames || 0;
+    $("scrub").max = Math.max(frameCount - 1, 0);
+    $("scrub").disabled = frameCount === 0;
+    if (following && (live || s.fruits.length)){
+      $("scrub").value = Math.max(frameCount - 1, 0);
+      fruitChip($("curFruit"), s.fruits.length||live ? s.cur : null, $("curVal"));
+      fruitChip($("nextFruit"), s.fruits.length||live ? s.next : null, $("nextVal"));
+    }
+    if (following && (live || s.fruits.length)){
       $("score").textContent = s.score.toLocaleString();
       $("step").textContent = s.step;
       $("ep").textContent = s.episode;
@@ -290,17 +425,32 @@ async function poll(){
       const named = policies.find(p=>p.id===s.policy);
       $("stageNote").textContent = named ? named.name : (s.policy || "");
       draw(s.fruits, s.shortlist, s.chosen, false);
-      renderShortlist(s.shortlist);
+      renderShortlist(s.shortlist, false);
       sparkline(s.history);
     }
-    $("err").innerHTML = s.error ? `<div class="err">${s.error}</div>` : "";
+    const banner = $("banner");
+    if (s.error){
+      banner.textContent = s.error;
+      banner.hidden = false;
+    } else { banner.hidden = true; }
   }catch(e){ /* server not up yet; keep polling */ }
   setTimeout(poll, 220);
 }
 
+$("scrub").addEventListener("input", (e)=>{ viewFrame(parseInt(e.target.value,10)); });
+$("followBtn").addEventListener("click", ()=>{
+  following = true; ghost = null; viewing = null;
+  $("followBtn").hidden = true; $("simNote") && ($("simNote").textContent = "");
+});
+
 $("play").addEventListener("click", async ()=>{
   if (!chosenId) return;
   $("play").disabled = true;
+  following = true; ghost = null; viewing = null; $("followBtn").hidden = true;
+  if (live){                      // switching: stop the current one first
+    await fetch("/api/stop",{method:"POST"});
+    for (let i=0;i<40 && live;i++){ await new Promise(r=>setTimeout(r,250)); }
+  }
   await fetch("/api/start",{method:"POST",headers:{"Content-Type":"application/json"},
     body:JSON.stringify({policy:chosenId})});
 });
@@ -316,7 +466,7 @@ $("stop").addEventListener("click", async ()=>{
     const preferred = policies.find(p=>p.id==="layered+rollout") || policies[0];
     chosenId = preferred ? preferred.id : null;
     renderPicker();
-    $("play").disabled = !chosenId;
+    syncButtons();
   }catch(e){
     $("picker").innerHTML = `<div class="err">Could not reach the server.</div>`;
   }

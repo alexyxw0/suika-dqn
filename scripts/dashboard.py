@@ -16,6 +16,7 @@ Run: python scripts/dashboard.py           then open http://localhost:8500
 from __future__ import annotations
 
 import argparse
+import collections
 import json
 import sys
 import threading
@@ -37,12 +38,23 @@ BOARD_H = 960
 
 # One shared snapshot, written by the runner thread and read by the server.
 STATE = {
-    "running": False, "policy": None, "episode": 0, "step": 0,
+    "running": False, "status": "idle", "policy": None, "episode": 0, "step": 0,
     "score": 0, "best": 0, "history": [], "fruits": [], "cur": 0, "next": 0,
     "shortlist": [], "chosen": None, "error": None, "thinking_ms": 0,
 }
 LOCK = threading.Lock()
 STOP = threading.Event()
+
+# Every board of the current episode, so a position can be revisited. One
+# episode runs to a few hundred drops; keeping the last 600 covers one with
+# room to spare and bounds the memory at a few megabytes.
+FRAMES = collections.deque(maxlen=600)
+
+# Simulation requests from the page. Only the runner thread may touch the
+# browser — Selenium is not safe to call from two threads — so a request is
+# left here and picked up between drops, and the answer left in SIM_RESULT.
+SIM_REQUEST = {"pending": None, "id": 0}
+SIM_RESULT = {"id": -1, "candidates": None, "error": None}
 
 
 def catalogue():
@@ -175,8 +187,14 @@ def runner(policy_id, args):
 
     env = None
     try:
+        with LOCK:
+            STATE["status"] = "opening the browser"
         env = make_env()
+        with LOCK:
+            STATE["status"] = "loading the policy"
         choose = make_chooser(policy_id, args.actions)
+        with LOCK:
+            STATE["status"] = "playing"
         episode = 0
         best = 0
         history = []
@@ -198,6 +216,14 @@ def runner(policy_id, args):
                                  next=raw["next"], shortlist=shortlist,
                                  chosen=action, step=step, score=int(score),
                                  episode=episode, thinking_ms=round(think, 1))
+                    FRAMES.append({
+                        "step": step, "score": int(score),
+                        "fruits": raw["fruits"], "cur": raw["cur"],
+                        "next": raw["next"], "shortlist": shortlist,
+                        "chosen": action, "episode": episode,
+                    })
+                    STATE["frames"] = len(FRAMES)
+                serve_simulation(env, args)
                 obs, _r, done, trunc, info = env.step(
                     np.array([action / (args.actions - 1)], dtype=np.float32))
                 score = info["score"]
@@ -210,6 +236,8 @@ def runner(policy_id, args):
             with LOCK:
                 STATE.update(score=int(score), best=best,
                              history=history[-40:], episode=episode)
+                FRAMES.clear()
+                STATE["frames"] = 0
     except Exception as exc:                       # noqa: BLE001
         with LOCK:
             STATE["error"] = f"{type(exc).__name__}: {exc}"
@@ -222,6 +250,36 @@ def runner(policy_id, args):
                 pass
         with LOCK:
             STATE["running"] = False
+            STATE["status"] = "idle"
+
+
+def serve_simulation(env, args):
+    """Answer one pending "what would this column do here" request.
+
+    Called between drops so the browser is only ever driven by this thread.
+    The board comes from a recorded frame, so the answer is what the physics
+    would really have done from that position, not a re-scoring of the board
+    on screen now.
+    """
+    with LOCK:
+        req = SIM_REQUEST["pending"]
+        SIM_REQUEST["pending"] = None
+    if not req:
+        return
+    try:
+        res = env.driver.execute_script(
+            "return Game.rollout(arguments[0], arguments[1], arguments[2], "
+            "arguments[3]);",
+            req["xs"], req["size"], 600, req["board"])
+        out = [{"column": c, "fruits": r["fruits"], "gained": r["gained"],
+                "lost": r["lost"], "ticks": r["ticks"]}
+               for c, r in zip(req["columns"], res)]
+        with LOCK:
+            SIM_RESULT.update(id=req["id"], candidates=out, error=None)
+    except Exception as exc:                       # noqa: BLE001
+        with LOCK:
+            SIM_RESULT.update(id=req["id"], candidates=None,
+                              error=f"{type(exc).__name__}: {exc}")
 
 
 PAGE = (Path(__file__).resolve().parent / "dashboard.html")
@@ -244,6 +302,30 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(200, PAGE.read_text(), "text/html; charset=utf-8")
         if self.path == "/api/policies":
             return self._send(200, json.dumps(catalogue()))
+        if self.path.startswith("/api/frames"):
+            with LOCK:
+                frames = [{"step": f["step"], "score": f["score"],
+                           "cur": f["cur"], "next": f["next"],
+                           "chosen": f["chosen"], "fruit": len(f["fruits"])}
+                          for f in FRAMES]
+            return self._send(200, json.dumps(frames))
+        if self.path.startswith("/api/frame/"):
+            try:
+                i = int(self.path.rsplit("/", 1)[1])
+            except ValueError:
+                return self._send(400, json.dumps({"error": "bad index"}))
+            with LOCK:
+                if not 0 <= i < len(FRAMES):
+                    return self._send(404, json.dumps({"error": "no such frame"}))
+                return self._send(200, json.dumps(FRAMES[i]))
+        if self.path.startswith("/api/simulation/"):
+            want = int(self.path.rsplit("/", 1)[1])
+            with LOCK:
+                if SIM_RESULT["id"] != want:
+                    return self._send(202, json.dumps({"pending": True}))
+                return self._send(200, json.dumps(
+                    {"candidates": SIM_RESULT["candidates"],
+                     "error": SIM_RESULT["error"]}))
         if self.path == "/api/state":
             with LOCK:
                 snap = dict(STATE)
@@ -259,7 +341,8 @@ class Handler(BaseHTTPRequestHandler):
             with LOCK:
                 if STATE["running"]:
                     return self._send(409, json.dumps({"error": "already running"}))
-                STATE.update(running=True, policy=payload.get("policy"),
+                STATE.update(running=True, status="starting",
+                             policy=payload.get("policy"),
                              error=None, history=[], best=0, episode=0,
                              score=0, step=0, fruits=[], shortlist=[])
             STOP.clear()
@@ -267,6 +350,25 @@ class Handler(BaseHTTPRequestHandler):
                              args=(payload["policy"], self.server.args),
                              daemon=True).start()
             return self._send(200, json.dumps({"ok": True}))
+        if self.path == "/api/simulate":
+            with LOCK:
+                if not STATE["running"]:
+                    return self._send(409, json.dumps(
+                        {"error": "nothing is playing — simulation runs in the "
+                                  "same browser the policy uses"}))
+                i = int(payload["frame"])
+                if not 0 <= i < len(FRAMES):
+                    return self._send(404, json.dumps({"error": "no such frame"}))
+                frame = FRAMES[i]
+                columns = payload.get("columns") or list(range(0, 40, 4))
+                SIM_REQUEST["id"] += 1
+                rid = SIM_REQUEST["id"]
+                SIM_REQUEST["pending"] = {
+                    "id": rid, "board": frame["fruits"], "size": frame["cur"],
+                    "columns": columns,
+                    "xs": [float(int((c / 39) * BOARD_W)) for c in columns],
+                }
+            return self._send(200, json.dumps({"id": rid}))
         if self.path == "/api/stop":
             STOP.set()
             return self._send(200, json.dumps({"ok": True}))
@@ -287,6 +389,19 @@ def main() -> int:
                     help="also open the real game window, not just the "
                          "dashboard's rendering of it")
     args = ap.parse_args()
+
+    try:
+        import suika_env.suika_browser_env  # noqa: F401
+    except ImportError:
+        print("  cannot import suika_env — the environment is not on the path.")
+        print("  It is a separate clone; from the repo root:")
+        print("")
+        print("    git clone https://github.com/edwhu/suika_rl.git")
+        print("    git -C suika_rl apply env-fixes.patch")
+        print("    export PYTHONPATH=$PWD/suika_rl")
+        print("")
+        print("  See the Setup section of README.md.")
+        return 1
 
     server = ThreadingHTTPServer(("127.0.0.1", args.port), Handler)
     server.args = args

@@ -123,10 +123,17 @@ The board is drawn from the fruit positions read out of the physics engine, so
 it is the board the policy is actually reasoning about rather than a
 screenshot of one.
 
-For the policies that simulate their candidates, the columns they weighed are
-drawn on the board and listed with what each was worth, which is the part worth
-watching: you can see the shortlist, the points each candidate would score, and
-which one was taken.
+The fruit in hand and the one after it are shown with their point values, and
+for the policies that simulate their candidates the columns they weighed are
+drawn on the board and listed with what each was worth.
+
+Every drop of the current episode is kept, so the slider under the board scrubs
+back through the game. Stop on any position and the shortlist for that moment
+comes back with it — and clicking a column **replays it in the physics engine
+from that board**, drawing where the fruit would actually have settled over the
+faded present. That is the real simulation, not a replay of what was recorded:
+the same `Game.rollout` the policy uses, given the stored position instead of
+the live one.
 
 `--show-browser` also opens the real game window alongside it.
 
