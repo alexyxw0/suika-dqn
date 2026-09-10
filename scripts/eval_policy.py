@@ -26,6 +26,9 @@ import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+import envpath                                                     # noqa: E402
+envpath.ensure()
+
 REFERENCE = "random 1424 | DQN from scratch 1455 | cloned 2449 | greedy 2497 | layered 2696"
 
 

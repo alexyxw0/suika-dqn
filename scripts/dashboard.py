@@ -30,6 +30,9 @@ import numpy as np
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
+import envpath                                                     # noqa: E402
+envpath.ensure()
+
 from heuristic import (BOARD_W, BOARD_WEIGHTS, POLICIES,           # noqa: E402
                        READ_STATE, RADII, score_all, score_board)
 
@@ -393,14 +396,7 @@ def main() -> int:
     try:
         import suika_env.suika_browser_env  # noqa: F401
     except ImportError:
-        print("  cannot import suika_env — the environment is not on the path.")
-        print("  It is a separate clone; from the repo root:")
-        print("")
-        print("    git clone https://github.com/edwhu/suika_rl.git")
-        print("    git -C suika_rl apply env-fixes.patch")
-        print("    export PYTHONPATH=$PWD/suika_rl")
-        print("")
-        print("  See the Setup section of README.md.")
+        print("  " + envpath.instructions().replace("\n", "\n  "))
         return 1
 
     server = ThreadingHTTPServer(("127.0.0.1", args.port), Handler)

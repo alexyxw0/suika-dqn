@@ -29,6 +29,9 @@ import numpy as np
 
 sys.path.insert(0, str(__import__('pathlib').Path(__file__).resolve().parent.parent))
 
+import envpath                                                     # noqa: E402
+envpath.ensure()
+
 FLOOR_Y = 912          # top of the floor body
 BOARD_W = 640
 N_SIZES = 11

@@ -21,6 +21,9 @@ import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+import envpath                                                     # noqa: E402
+envpath.ensure()
+
 import afterstate as A                                            # noqa: E402
 from heuristic import READ_STATE                                  # noqa: E402
 

@@ -35,6 +35,9 @@ import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+import envpath                                                     # noqa: E402
+envpath.ensure()
+
 from afterstate import encode                                     # noqa: E402
 from heuristic import (BOARD_W, BOARD_WEIGHTS, POLICIES,          # noqa: E402
                        READ_STATE, WEIGHT_NAMES, score_all, score_board)

@@ -37,6 +37,9 @@ import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+import envpath                                                     # noqa: E402
+envpath.ensure()
+
 
 def discounted_returns(rewards, gamma):
     out = np.zeros(len(rewards), dtype=np.float64)

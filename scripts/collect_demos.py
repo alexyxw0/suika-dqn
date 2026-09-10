@@ -30,6 +30,9 @@ import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+import envpath                                                     # noqa: E402
+envpath.ensure()
+
 from heuristic import (POLICIES, READ_STATE, WEIGHT_NAMES,        # noqa: E402
                        score_all)
 

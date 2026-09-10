@@ -30,6 +30,12 @@ from tensorflow.keras import layers, models
 from tensorflow.keras.models import load_model
 from tensorflow.keras.optimizers.schedules import PolynomialDecay
 
+import sys
+from pathlib import Path as _Path
+sys.path.insert(0, str(_Path(__file__).resolve().parent))
+import envpath                                                     # noqa: E402
+envpath.ensure()
+
 from agent import (EpsilonSchedule, NStepBuffer, ReplayBuffer, action_bins,
                    browser_failures, double_td_targets, restart_env,
                    standardise_rows, td_targets, terminal_reward,

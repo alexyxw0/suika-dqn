@@ -28,11 +28,13 @@ Requires Chrome and chromedriver — the environment drives a real browser.
 
 ```bash
 git clone https://github.com/edwhu/suika_rl.git
-cd suika_rl && pip install -e . && cd ..
-git -C suika_rl apply ../env-fixes.patch
-export PYTHONPATH=$PWD/suika_rl
+git -C suika_rl apply env-fixes.patch
+pip install -e suika_rl
 pip install -r requirements.txt
 ```
+
+Leave the clone there and every script finds it — no `PYTHONPATH` needed. Set
+one anyway if the clone lives elsewhere, and it wins.
 
 The environment is never edited in place. It is a clean clone plus a patch, so
 the working copy is reproducible rather than precious — which matters, because
@@ -42,7 +44,7 @@ the one used while writing this lived in `/tmp` and was cleared twice.
 
 ```bash
 PYTHON=$(which python) ./scripts/verify_patch.sh   # clone, apply, compile, import
-python -m pytest tests/ -q                         # 139 tests, no browser needed
+python -m pytest tests/ -q                         # 140 tests, no browser needed
 ```
 
 `verify_patch.sh` imports the patched module rather than stopping at
@@ -168,6 +170,7 @@ waiting for the board to stop moving.
 train.py              RL loop: replay, n-step targets, compiled gradient step
 agent.py              replay buffer, n-step returns, TD targets, crash recovery
 afterstate.py         encodes a candidate board the way the page does
+envpath.py            finds the environment clone so PYTHONPATH is optional
 scripts/heuristic.py  the hand-written policy, and the random baseline
 scripts/dashboard.py  local control panel for watching any policy play
 scripts/              demonstrations, cloning, evaluation, plotting, checks

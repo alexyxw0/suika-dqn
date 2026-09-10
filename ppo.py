@@ -55,6 +55,9 @@ from tensorflow.keras.models import load_model
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
+import envpath                                                     # noqa: E402
+envpath.ensure()
+
 from agent import (action_bins, browser_failures, explained_variance,
                    gae_advantages, normalise, restart_env, terminal_reward,
                    to_continuous)
