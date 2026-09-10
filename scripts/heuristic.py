@@ -37,6 +37,16 @@ BOARD_W = 640
 N_SIZES = 11
 # Game.fruitSizes radii and score values, read from the game.
 RADII = [24, 32, 40, 56, 64, 72, 84, 96, 128, 160, 192]
+# The dropper only ever hands out the five smallest (`Math.floor(rand() * 5)`
+# in the game). Anything above size 4 can never be merged by dropping a twin
+# on it — it has to be built out of what is already on the board.
+DROPPABLE = 5
+# How close a dropped twin has to land to count as reaching a fruit, and over
+# how many columns to look. The columns are the agent's own action space, so
+# "trapped" means trapped given the moves it actually has. See trapped_indices
+# for the measurement behind the slack.
+TRAP_SLACK = 32.0
+TRAP_ACTIONS = 40
 SCORES = [1, 3, 6, 10, 15, 21, 28, 36, 45, 55, 66]
 # Named policies. `greedy` is the one measured in runs/FINDINGS.md;
 # `layered` adds the stacking terms. Lookahead is a separate switch, so
@@ -223,6 +233,63 @@ def buried_small(fruits, gap=2):
                 n += 1
                 break
     return n
+
+
+def trapped_indices(fruits, actions=40, slack=TRAP_SLACK):
+    """Which fruits no droppable twin can reach.
+
+    `buried_small` asks whether something much bigger sits above a fruit, which
+    is a proxy. This asks the question directly, and in the agent's own terms:
+    of the `actions` columns it is allowed to drop into, is there one where an
+    identical fruit would come to rest touching this one? If there is not, the
+    fruit cannot be merged by any move available this turn — it is holding
+    space and returning nothing.
+
+    Only sizes the dropper actually produces count. A size-7 fruit with no
+    partner is not trapped, it is waiting on the board to build one, and
+    penalising that would be penalising ordinary play.
+
+    The reachability test is the same closed-form fall `score_candidate` uses,
+    which ignores roll and bounce, so `slack` stands in for the roll: a twin
+    that lands within it counts as having reached this fruit. Measured against
+    the engine over 86 fruit on six real boards, each tested against all forty
+    drops actually simulated (`scripts/check_trapped.py`):
+
+        slack   called trapped   missed    false free   agrees
+            6               56   11 (20%)     0 ( 0%)    87.2%
+           32               53    8 (15%)     0 ( 0%)    90.7%
+           48               49    5 (10%)     1 ( 3%)    93.0%
+           96               39    3 ( 8%)     9 (19%)    86.0%
+
+    32 is the default because it is the widest setting with no false frees.
+    Agreement is a point or two higher at 48, but the two errors are not worth
+    the same to a term that only ever subtracts: a *missed* charges a penalty
+    on a position that was fine, which potential-based shaping largely cancels
+    when it persists across a step, while a *false free* lets a real trap go
+    unpenalised, which is the whole signal being lost.
+    """
+    out = []
+    for i, (xi, yi, ri, si) in enumerate(fruits):
+        if si >= DROPPABLE:
+            continue
+        for a in range(actions):
+            x = (a / max(actions - 1, 1)) * BOARD_W
+            # The walls push a fruit dropped past the edge back inside, so the
+            # column the agent picks is not always the column it gets.
+            x = min(max(x, ri), BOARD_W - ri)
+            if abs(x - xi) >= ri + ri:      # cannot touch from any height
+                continue
+            y = landing_y(x, ri, fruits)
+            if math.hypot(x - xi, y - yi) <= ri + ri + slack:
+                break
+        else:
+            out.append(i)
+    return out
+
+
+def trapped_small(fruits, actions=TRAP_ACTIONS, slack=TRAP_SLACK):
+    """How many fruits on this board no droppable twin can reach."""
+    return len(trapped_indices(fruits, actions, slack))
 
 
 def score_board(result, weights):

@@ -36,10 +36,13 @@ sys.path.insert(0, str(_Path(__file__).resolve().parent))
 import envpath                                                     # noqa: E402
 envpath.ensure()
 
+sys.path.insert(0, str(_Path(__file__).resolve().parent / "scripts"))
+
 from agent import (EpsilonSchedule, NStepBuffer, ReplayBuffer, action_bins,
                    browser_failures, double_td_targets, restart_env,
                    standardise_rows, td_targets, terminal_reward,
-                   to_continuous)
+                   to_continuous, trap_shaping)
+from heuristic import READ_STATE, trapped_small                    # noqa: E402
 from suika_env.suika_browser_env import SuikaBrowserEnv
 
 # Both a dropped tab and a hung page have to be caught here, and they
@@ -309,6 +312,19 @@ def parse_args(argv=None):
                         "Score deltas are never negative, so without this the "
                         "only cost of dying is the forgone future value, which "
                         "a short n-step return can barely see")
+    p.add_argument("--trap-penalty", type=float, default=1.0,
+                   help="cost, in game points, of each small fruit no "
+                        "droppable twin can reach. The score delta says "
+                        "nothing about sealing a fruit under a bigger one, so "
+                        "without this the agent has no reason to keep the "
+                        "board workable. 0 disables it and the per-step board "
+                        "read it needs")
+    p.add_argument("--trap-shaping", choices=("potential", "flat"),
+                   default="potential",
+                   help="'potential' charges creating a trap and refunds "
+                        "clearing one, which provably leaves the optimal "
+                        "policy alone; 'flat' subtracts the count every step, "
+                        "which also penalises surviving. See agent.trap_shaping")
     p.add_argument("--double", dest="double", action="store_true", default=True,
                    help="Double DQN targets (default)")
     p.add_argument("--no-double", dest="double", action="store_false",
@@ -464,7 +480,13 @@ def main(argv=None) -> int:
                   f"grads {gradient_steps}"
                   + (f"  td {getattr(run_episode, 'last_losses', (0, 0))[0]:.3f}"
                      f"  bc {getattr(run_episode, 'last_losses', (0, 0))[1]:.3f}"
-                     if args.demos else ""), flush=True)
+                     if args.demos else "")
+                  # What the trap term actually contributed, against the raw
+                  # score above it. A shaping term nobody can see the size of
+                  # is a shaping term nobody can tune.
+                  + (f"  trap {getattr(run_episode, 'last_trap', (0, 0))[0]:+.1f}"
+                     f" ({getattr(run_episode, 'last_trap', (0, 0))[1]} held)"
+                     if args.trap_penalty else ""), flush=True)
             model.save(args.checkpoint)
 
             if args.eval_every and (episode + 1) % args.eval_every == 0:
@@ -554,6 +576,22 @@ def raise_exit():
     raise SystemExit(130)
 
 
+def count_trapped(env, args):
+    """Small fruit on the live board that no droppable twin can reach.
+
+    Read from the physics engine rather than from the observation: the grid the
+    network sees is a rasterisation, and reachability is a question about exact
+    circles. A dead browser returns 0 rather than raising — a reward term is
+    not worth losing an episode over, and the step that follows will raise
+    anyway.
+    """
+    try:
+        fruits = env.driver.execute_script(READ_STATE)["fruits"]
+    except BROWSER_DEAD:
+        return 0
+    return trapped_small([tuple(f) for f in fruits], args.actions)
+
+
 def run_episode(env, model, target, buffer, bins, epsilon, gradient_steps,
                 args, train_step, demo_data=None):
     """Play one episode, training as it goes. Returns reward, steps, grads."""
@@ -564,6 +602,12 @@ def run_episode(env, model, target, buffer, bins, epsilon, gradient_steps,
     steps = 0
     nstep = NStepBuffer(args.n_step, args.gamma)
     loss_terms: list = []
+    # The observation is a rasterised grid; it cannot answer "can anything
+    # reach this fruit", which needs the exact circles. That is one more
+    # script call per drop, so it is only made when the term is switched on.
+    trap_w = args.trap_penalty * args.reward_scale
+    trapped = count_trapped(env, args) if trap_w else 0
+    trap_total = 0.0
 
     while not done and (args.max_steps is None or steps < args.max_steps):
         steps += 1
@@ -579,6 +623,13 @@ def run_episode(env, model, target, buffer, bins, epsilon, gradient_steps,
         shaped, terminal = terminal_reward(reward, done, truncated,
                                            args.terminal_penalty,
                                            args.reward_scale)
+        if trap_w:
+            after = 0 if terminal else count_trapped(env, args)
+            bonus = trap_shaping(trapped, after, trap_w, args.gamma, terminal,
+                                 args.trap_shaping == "potential")
+            shaped += bonus
+            trap_total += bonus
+            trapped = after
         ready = nstep.push(state, action_idx, shaped, next_state, terminal)
         if ready is not None:
             buffer.push(*ready)
@@ -607,6 +658,7 @@ def run_episode(env, model, target, buffer, bins, epsilon, gradient_steps,
         td = sum(t for t, _ in loss_terms) / len(loss_terms)
         bc = sum(b for _, b in loss_terms) / len(loss_terms)
         run_episode.last_losses = (td, bc)
+    run_episode.last_trap = (trap_total, trapped)
     return total_reward, steps, gradient_steps
 
 

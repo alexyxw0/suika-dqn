@@ -17,7 +17,9 @@ from __future__ import annotations
 
 import argparse
 import collections
+import errno
 import json
+import socket
 import sys
 import threading
 import time
@@ -334,6 +336,43 @@ def serve_simulation(env, args):
                               error=f"{type(exc).__name__}: {exc}")
 
 
+def open_server(preferred):
+    """Bind the dashboard, preferring `preferred` but never failing on it.
+
+    Wanting two of these at once is ordinary — one watching a run while you
+    poke at another policy — and so is restarting after a crash that left the
+    old socket in TIME_WAIT. Neither is worth a traceback: if the preferred
+    port is taken, the OS is asked for whichever one is free and the real
+    address is printed.
+    """
+    for port in (preferred, 0):
+        try:
+            return ThreadingHTTPServer(("127.0.0.1", port), Handler)
+        except OSError as exc:
+            if exc.errno != errno.EADDRINUSE or port == 0:
+                raise
+            print(f"  port {preferred} is in use, taking a free one instead")
+    raise RuntimeError("no port available")          # unreachable
+
+
+def free_port(preferred):
+    """A port for the game's own page server, which the env opens later.
+
+    Unlike the dashboard's socket this one cannot simply be held: the env
+    binds it itself, minutes later, in a subprocess. So it is probed and
+    released. Two dashboards started in the same second could still collide,
+    which is a smaller problem than the one this fixes.
+    """
+    for port in (preferred, 0):
+        with socket.socket() as sock:
+            try:
+                sock.bind(("127.0.0.1", port))
+            except OSError:
+                continue
+            return sock.getsockname()[1]
+    raise RuntimeError("no port available")          # unreachable
+
+
 PAGE = (Path(__file__).resolve().parent / "dashboard.html")
 
 
@@ -450,9 +489,12 @@ def main() -> int:
     ap = argparse.ArgumentParser(
         description=__doc__,
         formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--port", type=int, default=8500, help="dashboard port")
+    ap.add_argument("--port", type=int, default=8500,
+                    help="preferred dashboard port; a free one is taken "
+                         "if it is busy")
     ap.add_argument("--env-port", type=int, default=8600,
-                    help="port the game's own page server uses")
+                    help="preferred port for the game's own page server; "
+                         "a free one is taken if it is busy")
     ap.add_argument("--actions", type=int, default=40)
     ap.add_argument("--max-steps", type=int, default=400)
     ap.add_argument("--show-browser", dest="headless", action="store_false",
@@ -467,7 +509,9 @@ def main() -> int:
         print("  " + envpath.diagnose(exc).replace("\n", "\n  "))
         return 1
 
-    server = ThreadingHTTPServer(("127.0.0.1", args.port), Handler)
+    server = open_server(args.port)
+    args.port = server.server_address[1]
+    args.env_port = free_port(args.env_port)
     server.args = args
     print(f"  dashboard on http://localhost:{args.port}")
     print(f"  {len(catalogue())} policies available")

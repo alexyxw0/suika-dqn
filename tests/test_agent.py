@@ -10,7 +10,7 @@ from agent import (EpsilonSchedule, ReplayBuffer, action_bins, apply_targets,
                    browser_failures, double_td_targets,
                    explained_variance, gae_advantages, mirror_boards,
                    normalise, standardise_rows, td_targets,
-                   terminal_reward, to_continuous)
+                   terminal_reward, to_continuous, trap_shaping)
 
 
 class TestActionBins:
@@ -565,3 +565,64 @@ class TestNormalise:
     def test_the_ordering_survives(self):
         raw = [3.0, 1.0, 2.0]
         assert list(np.argsort(normalise(raw))) == list(np.argsort(raw))
+
+
+class TestTrapShaping:
+    """The trap term, which is the only per-step signal the agent gets that is
+    not a score delta. Its whole justification is that it leaves the optimal
+    policy alone, so that is what these check."""
+
+    def test_weight_zero_costs_nothing(self):
+        assert trap_shaping(0, 9, 0.0, 0.99, False) == 0.0
+
+    def test_creating_a_trap_is_charged(self):
+        assert trap_shaping(0, 1, 1.0, 0.99, False) < 0
+
+    def test_clearing_a_trap_is_refunded(self):
+        assert trap_shaping(1, 0, 1.0, 0.99, False) > 0
+
+    def test_making_and_clearing_nets_out(self):
+        # Undiscounted the two do not quite cancel; the residue is the
+        # discount, and it is small and in the right direction.
+        made = trap_shaping(0, 1, 1.0, 0.99, False)
+        cleared = trap_shaping(1, 0, 1.0, 0.99, False)
+        assert made + cleared == pytest.approx(0.01, abs=1e-9)
+
+    def test_a_terminal_state_has_no_potential(self):
+        # Phi(terminal) must be 0 or the telescoping leaves a residue on every
+        # death and the policy-invariance guarantee is void. What is left is
+        # the refund of what was charged when the traps were made.
+        assert trap_shaping(3, 3, 1.0, 0.99, True) == pytest.approx(3.0)
+
+    def test_it_telescopes_over_an_episode(self):
+        """The sum of the discounted shaping over any trajectory depends only
+        on where it started, never on the route. That is the property that
+        makes this safe to add to the reward."""
+        gamma = 0.97
+        for route in ([0, 1, 2, 1, 3, 0, 2], [0, 3, 3, 3, 0, 0, 2],
+                      [0, 0, 0, 0, 0, 0, 2]):
+            total = 0.0
+            for t, (before, after) in enumerate(zip(route, route[1:])):
+                total += gamma ** t * trap_shaping(before, after, 1.0, gamma,
+                                                   False)
+            # gamma**T * Phi(s_T) - Phi(s_0), with Phi(s) = -w * trapped
+            expected = gamma ** (len(route) - 1) * -route[-1] - -route[0]
+            assert total == pytest.approx(expected, abs=1e-9)
+
+    def test_flat_form_is_a_tax_on_holding(self):
+        # The literal per-step reading: it charges every step a trap exists,
+        # so an episode twice as long pays twice as much for the same board.
+        assert trap_shaping(3, 3, 2.0, 0.99, False,
+                            potential=False) == pytest.approx(-6.0)
+
+    def test_flat_form_does_not_telescope(self):
+        """The reason it is not the default: two routes ending in the same
+        place cost different amounts, so it reorders policies."""
+        gamma = 0.97
+        held = sum(gamma ** t * trap_shaping(1, 1, 1.0, gamma, False,
+                                             potential=False)
+                   for t in range(6))
+        cleared = sum(gamma ** t * trap_shaping(1, 0, 1.0, gamma, False,
+                                                potential=False)
+                      for t in range(6))
+        assert held < cleared

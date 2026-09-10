@@ -268,6 +268,55 @@ roughly three minutes an episode. The 80 ms figure was wall-clock settling in
 the live game, which steps physics on `requestAnimationFrame` and is therefore
 frame-paced; a scratch engine has no renderer and no frame pacing.
 
+### 8. The TD reward never mentioned the board, only the score
+
+The reward the DQN learns from is `Game.score` minus what it was last step,
+optionally with a penalty at death (`agent.terminal_reward`). That is the whole
+of it. A score delta is never negative and says nothing about the state the
+board is left in, so sealing a size-0 fruit under a size-8 one cost the agent
+exactly nothing at the moment it did it — and by the time it cost anything, an
+n-step return no longer reached back far enough to connect the two.
+
+The hand-written policies had always known about this: `layered` carries a
+`trap` term and `BOARD_WEIGHTS` a `buried` one. It reached the network only
+through behaviour cloning, as an imitation of a demonstrator that happened to
+avoid traps, never as a signal TD could act on.
+
+`heuristic.trapped_small` states it in the agent's own terms: of the forty
+columns it may drop into, is there one where an identical fruit would come to
+rest touching this one? If not, that fruit cannot be merged by any move
+available, whatever the network believes. Only sizes 0–4 count — the dropper
+never hands out anything larger (`Math.floor(rand() * 5)`), so a lone size-7 is
+waiting, not trapped.
+
+It is a closed-form estimate, so it was measured against the engine: 86
+droppable fruit across six real boards, each tested against all forty drops
+actually simulated (`scripts/check_trapped.py`).
+
+| contact slack | called trapped | engine merged it | real trap missed | agrees |
+|---|---|---|---|---|
+| 6 | 56 | 11 (20%) | 0 (0%) | 87.2% |
+| 32 | 53 | 8 (15%) | 0 (0%) | 90.7% |
+| 48 | 49 | 5 (10%) | 1 (3%) | 93.0% |
+| 96 | 39 | 3 (8%) | 9 (19%) | 86.0% |
+
+Slack stands in for roll, which the closed-form fall ignores. 32 is the default
+because it is the widest setting that never calls a genuinely trapped fruit
+free: for a term that only ever subtracts, losing the signal is worse than
+charging a penalty on a position that turned out fine.
+
+The term enters as potential-based shaping — `gamma * PHI(s') - PHI(s)` with
+`PHI(s) = -w * trapped(s)` — which telescopes over an episode and so provably
+leaves the optimal policy where it was. It charges the drop that creates a trap
+and refunds the one that clears it. The literal per-step reading is available
+as `--trap-shaping flat`, and is not the default because it also taxes
+survival, which the numbers above say is where the points are.
+
+**Not yet measured against score.** The weight is calibrated, not fitted: at
+`--trap-penalty 1.0` one trapped fruit costs one game point, which is the
+exchange rate `BOARD_WEIGHTS` already used (`gained=12`, `buried=-12`). Whether
+it moves the final number needs a training run that has not been done.
+
 ## What would plausibly move it
 
 The heuristic never simulates — it estimates where a fruit lands and never
@@ -287,3 +336,4 @@ teacher and a re-clone, which has never been run.
     python scripts/collect_demos.py --episodes 90                # ~24k boards
     python scripts/pretrain.py                                   # ~5 min
     python scripts/eval_policy.py --checkpoint runs/bc.h5 --episodes 25
+    python scripts/check_trapped.py --boards 6                   # the table in 8

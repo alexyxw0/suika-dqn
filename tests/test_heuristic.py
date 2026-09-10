@@ -15,10 +15,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "scripts"))
 
 import numpy as np
 
-from heuristic import (BOARD_W, BOARD_WEIGHTS, FLOOR_Y, POLICIES, RADII,
-                       buried_small, choose, contacts, landing_y,
-                       ready_pairs, score_all, score_board,
-                       score_candidate)
+from heuristic import (BOARD_W, BOARD_WEIGHTS, DROPPABLE, FLOOR_Y,
+                       POLICIES, RADII, buried_small, choose, contacts,
+                       landing_y, ready_pairs, score_all, score_board,
+                       score_candidate, trapped_indices, trapped_small)
 
 WEIGHTS = {"merge": 30.0, "chain": 60.0, "low": 200.0, "bury": -8.0,
            "stack": 0.0, "trap": 0.0}
@@ -296,3 +296,70 @@ class TestScoreBoard:
         clear = self._r(fruits=[(100, 800, 24, 0), (500, 700, 96, 7)])
         buried = self._r(fruits=[(100, 800, 24, 0), (100, 700, 96, 7)])
         assert score_board(clear, w) > score_board(buried, w)
+
+
+class TestTrappedSmall:
+    """"Trapped" means: of the forty columns the agent may drop into, none puts
+    an identical fruit in contact with this one. Measured against the engine in
+    scripts/check_trapped.py; these pin the geometry it rests on."""
+
+    def test_an_empty_board_traps_nothing(self):
+        assert trapped_small([]) == 0
+
+    def test_a_fruit_alone_on_the_floor_is_reachable(self):
+        assert trapped_small([(320.0, FLOOR_Y - 24, 24.0, 0)]) == 0
+
+    def test_a_fruit_under_a_boulder_is_trapped(self):
+        small = (320.0, FLOOR_Y - 24, 24.0, 0)
+        boulder = (320.0, FLOOR_Y - 48 - 160, 160.0, 9)
+        assert trapped_indices([small, boulder]) == [0]
+
+    def test_sizes_the_dropper_never_hands_out_do_not_count(self):
+        """A size-9 fruit with no partner is not trapped, it is waiting on the
+        board to build one. Penalising it would penalise ordinary play."""
+        buried_big = [(320.0, FLOOR_Y - 160, 160.0, 9),
+                      (320.0, FLOOR_Y - 320 - 192, 192.0, 10)]
+        assert trapped_small(buried_big) == 0
+
+    def test_every_droppable_size_can_be_trapped(self):
+        for size in range(DROPPABLE):
+            r = RADII[size]
+            roof = RADII[10]
+            board = [(320.0, FLOOR_Y - r, float(r), size),
+                     (320.0, FLOOR_Y - 2 * r - roof, float(roof), 10)]
+            assert trapped_small(board) == 1, f"size {size} should be trapped"
+
+    def test_a_fruit_in_a_corner_is_still_reachable(self):
+        """The walls clamp a drop back inside, so the edge columns are usable
+        and a fruit against the wall is not trapped by the wall alone."""
+        assert trapped_small([(24.0, FLOOR_Y - 24, 24.0, 0)]) == 0
+
+    def test_more_columns_can_only_help(self):
+        """Reachability is a search over the action space, so a finer one can
+        never trap more fruit than a coarser one."""
+        board = [(300.0, FLOOR_Y - 24, 24.0, 0),
+                 (300.0, FLOOR_Y - 48 - 84, 84.0, 6),
+                 (150.0, FLOOR_Y - 32, 32.0, 1),
+                 (480.0, FLOOR_Y - 40, 40.0, 2)]
+        coarse = trapped_small(board, actions=10)
+        fine = trapped_small(board, actions=80)
+        assert fine <= coarse
+
+    def test_more_slack_can_only_help(self):
+        """Slack stands in for roll. Allowing more of it can free a fruit but
+        must never trap one that was already reachable."""
+        board = [(300.0, FLOOR_Y - 24, 24.0, 0),
+                 (300.0, FLOOR_Y - 48 - 96, 96.0, 7),
+                 (200.0, FLOOR_Y - 32, 32.0, 1)]
+        tight = set(trapped_indices(board, slack=0.0))
+        loose = set(trapped_indices(board, slack=64.0))
+        assert loose <= tight
+
+    def test_it_is_stricter_than_buried_small(self):
+        """A fruit with a clear column above it is reachable even with a bigger
+        fruit overlapping its span — which buried_small counts and this does
+        not."""
+        board = [(300.0, FLOOR_Y - 24, 24.0, 0),
+                 (355.0, FLOOR_Y - 56, 56.0, 3)]
+        assert buried_small(board) == 1
+        assert trapped_small(board) == 0

@@ -283,6 +283,60 @@ def terminal_reward(reward, done, truncated, penalty: float = 0.0,
     return (reward - (penalty if done else 0.0)) * scale, bool(done)
 
 
+def trap_shaping(before, after, weight, gamma, terminal, potential=True):
+    """The per-step cost of leaving a small fruit where nothing can reach it.
+
+    The reward the environment gives is a score delta, which is never negative.
+    Nothing in it says a drop has just sealed a size-0 fruit under a size-8 one
+    — that costs nothing this step, and by the time it costs anything the
+    n-step return no longer reaches back far enough to see it. So the agent
+    learns to score and to survive, and never learns to keep the board
+    workable, which is what `trapped_small` counts.
+
+    Two forms, and the difference matters more than the weight does.
+
+    `potential=True` is potential-based shaping (Ng, Harada & Russell, 1999):
+    with a potential PHI(s) = -weight * trapped(s), the shaping term is
+    `gamma * PHI(s') - PHI(s)`. Over an episode it telescopes to a constant, so
+    the ordering of policies by return is exactly what it was — this cannot
+    invent a new optimum, it can only make the existing one easier to find. In
+    practice it charges the moment a drop creates a trap and refunds the moment
+    one is cleared. PHI at a terminal state must be zero, or the telescoping
+    leaves a residue on every death and the guarantee is void; hence the
+    `terminal` argument.
+
+    A miscount that persists across the step largely cancels here, which is
+    what makes the 15% `trapped_small` disagreement with the engine tolerable:
+    the signal is in the change, and a fruit wrongly called trapped in both
+    states contributes only `(gamma - 1) * weight`.
+
+    Two consequences of the telescoping look wrong in a log and are not.
+    Holding a trap without changing anything pays `(1 - gamma) * weight`, a
+    small positive; and dying while holding t of them pays `t * weight`,
+    refunding what was charged when they were made. Both are the arithmetic of
+    a negative potential returning to zero, and both are already accounted for
+    by the discounting: a trap made at step i and never cleared costs
+    `gamma**i * weight` and refunds `gamma**T * weight`, which is a net loss
+    that grows the longer the game runs. Only the undiscounted per-step view
+    makes it look like a bonus.
+
+    `potential=False` is the literal reading — subtract `weight * trapped(s')`
+    every step. It is a flat tax on holding traps rather than on creating them,
+    and it is not reward-neutral: because it accrues per step, a longer episode
+    accumulates more of it, so it argues against exactly the survival the
+    measured baseline says the points come from (`runs/FINDINGS.md`: 63% of the
+    hand-written policy's advantage is episode length). Kept because it is the
+    thing that was asked for and is worth being able to compare against, but it
+    is not the default.
+    """
+    if not weight:
+        return 0.0
+    if not potential:
+        return -weight * after
+    phi_after = 0.0 if terminal else -weight * after
+    return gamma * phi_after - (-weight * before)
+
+
 def gae_advantages(rewards, values, dones, last_value, gamma=0.99, lam=0.95):
     """Generalised advantage estimation (Schulman et al., 2016).
 
