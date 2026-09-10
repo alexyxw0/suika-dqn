@@ -395,8 +395,8 @@ def main() -> int:
 
     try:
         import suika_env.suika_browser_env  # noqa: F401
-    except ImportError:
-        print("  " + envpath.instructions().replace("\n", "\n  "))
+    except ImportError as exc:
+        print("  " + envpath.diagnose(exc).replace("\n", "\n  "))
         return 1
 
     server = ThreadingHTTPServer(("127.0.0.1", args.port), Handler)
