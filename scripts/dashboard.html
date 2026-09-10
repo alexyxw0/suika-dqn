@@ -177,7 +177,7 @@ tr.taken td{color:var(--accent); font-weight:600}
         <div class="panel-body" id="picker"><div class="empty">loading&hellip;</div></div>
         <div class="controls">
           <button class="play" id="play">Play</button>
-          <button class="stop" id="stop" disabled>Stop</button>
+          <button class="stop" id="stop" disabled>Pause</button>
         </div>
       </div>
 
@@ -218,6 +218,7 @@ const $ = (id) => document.getElementById(id);
 const cv = $("board"), cx = cv.getContext("2d");
 let policies = [], chosenId = null, playingId = null, live = false;
 let following = true, frameCount = 0, viewing = null, ghost = null, simSeq = null;
+let alive = false, paused = false;
 const SCORE_VALUE = [1,3,6,10,15,21,28,36,45,55,66];
 
 function css(v){ return getComputedStyle(document.documentElement).getPropertyValue(v).trim(); }
@@ -332,7 +333,8 @@ function renderShortlist(list, clickable){
   }
   html += `</tbody></table>`;
   if (clickable) html += `<div class="empty" id="simNote" style="margin-top:8px">
-    Click a column to replay it in the physics engine from this position.</div>`;
+    ${alive ? "Click a column to replay it in the physics engine from this position."
+            : "Press Play to open a browser, then scrub back and click a column to replay it."}</div>`;
   $("shortlist").innerHTML = html;
   if (clickable){
     $("shortlist").querySelectorAll("tr.cand").forEach(tr=>{
@@ -347,9 +349,12 @@ function renderShortlist(list, clickable){
 
 function syncButtons(){
   const b = $("play");
-  const switching = live && chosenId && chosenId !== playingId;
-  b.textContent = switching ? "Switch to this" : "Play";
-  b.disabled = !chosenId || (live && !switching);
+  const different = chosenId && chosenId !== playingId;
+  if (live)        b.textContent = different ? "Switch to this" : "Play";
+  else if (paused) b.textContent = different ? "Switch to this" : "Resume";
+  else             b.textContent = "Play";
+  b.disabled = !chosenId || (live && !different);
+  $("stop").textContent = "Pause";
   $("stop").disabled = !live;
 }
 
@@ -366,6 +371,10 @@ async function viewFrame(i){
   const f = await (await fetch("/api/frame/" + i)).json();
   if (f.error) return;
   viewing = { index: i, frame: f };
+  $("scrub").value = i;               // the handle has to follow the frame
+  $("score").textContent = f.score.toLocaleString();
+  $("step").textContent = f.step;
+  $("ep").textContent = f.episode;
   showFrame(f, `drop ${f.step} of episode ${f.episode} \u00b7 score ${f.score.toLocaleString()}`);
 }
 
@@ -409,18 +418,36 @@ async function poll(){
     $("pill").innerHTML = `<span class="dot"></span>${s.status || (live?"playing":"idle")}`;
     syncButtons();
     frameCount = s.frames || 0;
+    alive = !!s.alive;
+    paused = alive && !live;
     $("scrub").max = Math.max(frameCount - 1, 0);
+    // Enabled whenever there is something recorded. Pausing is when the
+    // timeline is most wanted, so tying it to "playing" had it switch off at
+    // exactly the wrong moment.
     $("scrub").disabled = frameCount === 0;
+    // Pausing stops following, so the board holds the position you paused on —
+    // but only when there is a frame to hold. Pausing exactly on an episode
+    // boundary leaves nothing recorded, and switching away from live then left
+    // the board stuck on the placeholder with no way back.
+    if (paused && following && frameCount > 0){
+      following = false;
+      $("followBtn").hidden = false;
+      viewFrame(frameCount - 1);
+    }
+    if (!following && frameCount === 0){        // nothing left to look at
+      following = true; viewing = null; ghost = null;
+      $("followBtn").hidden = true;
+    }
     if (following && (live || s.fruits.length)){
       $("scrub").value = Math.max(frameCount - 1, 0);
       fruitChip($("curFruit"), s.fruits.length||live ? s.cur : null, $("curVal"));
       fruitChip($("nextFruit"), s.fruits.length||live ? s.next : null, $("nextVal"));
     }
+    $("best").textContent = (s.best || 0).toLocaleString();
     if (following && (live || s.fruits.length)){
       $("score").textContent = s.score.toLocaleString();
       $("step").textContent = s.step;
       $("ep").textContent = s.episode;
-      $("best").textContent = s.best.toLocaleString();
       $("think").textContent = s.thinking_ms ? s.thinking_ms + " ms to choose" : "";
       const named = policies.find(p=>p.id===s.policy);
       $("stageNote").textContent = named ? named.name : (s.policy || "");
@@ -446,10 +473,15 @@ $("followBtn").addEventListener("click", ()=>{
 $("play").addEventListener("click", async ()=>{
   if (!chosenId) return;
   $("play").disabled = true;
+  const resuming = paused && chosenId === playingId;
   following = true; ghost = null; viewing = null; $("followBtn").hidden = true;
-  if (live){                      // switching: stop the current one first
+  if (live){                      // switching: pause the current one first
     await fetch("/api/stop",{method:"POST"});
     for (let i=0;i<40 && live;i++){ await new Promise(r=>setTimeout(r,250)); }
+  }
+  if (!resuming && alive){        // a different policy needs its own browser
+    await fetch("/api/shutdown",{method:"POST"});
+    for (let i=0;i<60 && alive;i++){ await new Promise(r=>setTimeout(r,250)); }
   }
   await fetch("/api/start",{method:"POST",headers:{"Content-Type":"application/json"},
     body:JSON.stringify({policy:chosenId})});

@@ -41,12 +41,13 @@ BOARD_H = 960
 
 # One shared snapshot, written by the runner thread and read by the server.
 STATE = {
-    "running": False, "status": "idle", "policy": None, "episode": 0, "step": 0,
+    "running": False, "alive": False, "status": "idle", "policy": None, "episode": 0, "step": 0,
     "score": 0, "best": 0, "history": [], "fruits": [], "cur": 0, "next": 0,
     "shortlist": [], "chosen": None, "error": None, "thinking_ms": 0,
 }
 LOCK = threading.Lock()
-STOP = threading.Event()
+STOP = threading.Event()        # stop stepping, but leave everything standing
+SHUTDOWN = threading.Event()    # close the browser and end the thread
 
 # Every board of the current episode, so a position can be revisited. One
 # episode runs to a few hundred drops; keeping the last 600 covers one with
@@ -177,7 +178,14 @@ def make_chooser(policy_id, actions):
 
 
 def runner(policy_id, args):
-    """Play episodes until asked to stop, publishing state as it goes."""
+    """Play episodes, pause on request, and stay alive while paused.
+
+    Pausing has to leave everything standing. The timeline exists to be looked
+    at *after* stopping, and the first version tore down the browser, dropped
+    the recorded frames and ended the only thread permitted to drive Selenium —
+    so the moment you stopped to study a position, everything needed to study
+    it had gone with it.
+    """
     from agent import browser_failures, restart_env
     from suika_env.suika_browser_env import SuikaBrowserEnv
     from train import observation
@@ -197,50 +205,86 @@ def runner(policy_id, args):
             STATE["status"] = "loading the policy"
         choose = make_chooser(policy_id, args.actions)
         with LOCK:
-            STATE["status"] = "playing"
-        episode = 0
-        best = 0
-        history = []
-        while not STOP.is_set():
-            obs, _ = env.reset()
-            score, step = 0.0, 0
-            while step < args.max_steps and not STOP.is_set():
-                raw = env.driver.execute_script(READ_STATE)
-                raw["obs"] = observation(obs)
-                began = time.time()
-                try:
-                    action, shortlist = choose(env, raw)
-                except browser_dead:
-                    raise
-                think = (time.time() - began) * 1000
+            STATE.update(alive=True, status="playing")
 
+        episode, best, history = 0, 0, []
+        while not SHUTDOWN.is_set():
+            # Paused between episodes: wait here rather than resetting, or the
+            # act of resuming would throw away the game just studied.
+            if STOP.is_set():
                 with LOCK:
-                    STATE.update(fruits=raw["fruits"], cur=raw["cur"],
-                                 next=raw["next"], shortlist=shortlist,
-                                 chosen=action, step=step, score=int(score),
-                                 episode=episode, thinking_ms=round(think, 1))
-                    FRAMES.append({
-                        "step": step, "score": int(score),
-                        "fruits": raw["fruits"], "cur": raw["cur"],
-                        "next": raw["next"], "shortlist": shortlist,
-                        "chosen": action, "episode": episode,
-                    })
-                    STATE["frames"] = len(FRAMES)
+                    if STATE["running"]:
+                        STATE.update(running=False, status="paused")
                 serve_simulation(env, args)
-                obs, _r, done, trunc, info = env.step(
-                    np.array([action / (args.actions - 1)], dtype=np.float32))
-                score = info["score"]
-                step += 1
-                if done or trunc:
-                    break
-            best = max(best, int(score))
-            history.append(int(score))
-            episode += 1
+                time.sleep(0.05)
+                continue
+
             with LOCK:
-                STATE.update(score=int(score), best=best,
-                             history=history[-40:], episode=episode)
+                STATE.update(running=True, status="playing")
                 FRAMES.clear()
                 STATE["frames"] = 0
+
+            score, step, ended = 0.0, 0, False
+            try:
+                obs, _ = env.reset()
+                while step < args.max_steps and not SHUTDOWN.is_set():
+                    # Paused mid-episode. Nothing is reset and nothing is
+                    # dropped; the board simply stops advancing, which is what
+                    # makes "pause, look, carry on" possible at all.
+                    if STOP.is_set():
+                        with LOCK:
+                            if STATE["running"]:
+                                STATE.update(running=False, status="paused")
+                        serve_simulation(env, args)
+                        time.sleep(0.05)
+                        continue
+                    with LOCK:
+                        if not STATE["running"]:
+                            STATE.update(running=True, status="playing")
+
+                    raw = env.driver.execute_script(READ_STATE)
+                    raw["obs"] = observation(obs)
+                    began = time.time()
+                    action, shortlist = choose(env, raw)
+                    think = (time.time() - began) * 1000
+
+                    with LOCK:
+                        STATE.update(fruits=raw["fruits"], cur=raw["cur"],
+                                     next=raw["next"], shortlist=shortlist,
+                                     chosen=action, step=step, score=int(score),
+                                     episode=episode, thinking_ms=round(think, 1))
+                        FRAMES.append({
+                            "step": step, "score": int(score),
+                            "fruits": raw["fruits"], "cur": raw["cur"],
+                            "next": raw["next"], "shortlist": shortlist,
+                            "chosen": action, "episode": episode,
+                        })
+                        STATE["frames"] = len(FRAMES)
+                    serve_simulation(env, args)
+
+                    obs, _r, done, trunc, info = env.step(
+                        np.array([action / (args.actions - 1)], dtype=np.float32))
+                    score = info["score"]
+                    step += 1
+                    if done or trunc:
+                        ended = True
+                        break
+            except browser_dead as error:
+                with LOCK:
+                    STATE["status"] = "browser lost, restarting"
+                print(f"  browser lost: {str(error).splitlines()[0]}", flush=True)
+                env = restart_env(env, make_env)
+                continue
+
+            if SHUTDOWN.is_set():
+                break
+            if ended or step >= args.max_steps:
+                best = max(best, int(score))
+                history.append(int(score))
+                episode += 1
+                with LOCK:
+                    STATE.update(score=int(score), best=best,
+                                 history=history[-40:], episode=episode)
     except Exception as exc:                       # noqa: BLE001
         with LOCK:
             STATE["error"] = f"{type(exc).__name__}: {exc}"
@@ -252,8 +296,7 @@ def runner(policy_id, args):
             except Exception:                      # noqa: BLE001
                 pass
         with LOCK:
-            STATE["running"] = False
-            STATE["status"] = "idle"
+            STATE.update(running=False, alive=False, status="idle")
 
 
 def serve_simulation(env, args):
@@ -344,10 +387,24 @@ class Handler(BaseHTTPRequestHandler):
             with LOCK:
                 if STATE["running"]:
                     return self._send(409, json.dumps({"error": "already running"}))
+                # Paused on the same policy: just carry on, keeping the browser
+                # and everything recorded so far.
+                if STATE["alive"] and payload.get("policy") == STATE["policy"]:
+                    STOP.clear()
+                    return self._send(200, json.dumps({"ok": True, "resumed": True}))
+                if STATE["alive"]:
+                    SHUTDOWN.set()
+                    STOP.set()
                 STATE.update(running=True, status="starting",
                              policy=payload.get("policy"),
                              error=None, history=[], best=0, episode=0,
                              score=0, step=0, fruits=[], shortlist=[])
+            for _ in range(120):          # let any previous browser close
+                with LOCK:
+                    if not STATE["alive"]:
+                        break
+                time.sleep(0.25)
+            SHUTDOWN.clear()
             STOP.clear()
             threading.Thread(target=runner,
                              args=(payload["policy"], self.server.args),
@@ -355,10 +412,11 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(200, json.dumps({"ok": True}))
         if self.path == "/api/simulate":
             with LOCK:
-                if not STATE["running"]:
+                if not STATE["alive"]:
                     return self._send(409, json.dumps(
-                        {"error": "nothing is playing — simulation runs in the "
-                                  "same browser the policy uses"}))
+                        {"error": "no browser open — press Play first; "
+                                  "simulation runs in the same one the policy "
+                                  "uses"}))
                 i = int(payload["frame"])
                 if not 0 <= i < len(FRAMES):
                     return self._send(404, json.dumps({"error": "no such frame"}))
@@ -373,6 +431,10 @@ class Handler(BaseHTTPRequestHandler):
                 }
             return self._send(200, json.dumps({"id": rid}))
         if self.path == "/api/stop":
+            STOP.set()                # pause: browser, frames and timeline stay
+            return self._send(200, json.dumps({"ok": True}))
+        if self.path == "/api/shutdown":
+            SHUTDOWN.set()
             STOP.set()
             return self._send(200, json.dumps({"ok": True}))
         return self._send(404, json.dumps({"error": "not found"}))
@@ -407,6 +469,7 @@ def main() -> int:
     try:
         server.serve_forever()
     except KeyboardInterrupt:
+        SHUTDOWN.set()
         STOP.set()
         time.sleep(1)
         print("\n  stopped")
