@@ -71,6 +71,18 @@ tr.simmed td{color:var(--accent); font-weight:600}
 .stage-foot{display:flex; justify-content:space-between; align-items:center; gap:10px;
   margin-top:10px; color:var(--ink-3); font-size:12px}
 .hint{font-family:var(--font-num); font-size:11.5px}
+/* The rollout transport. Hidden until a candidate has actually been
+   simulated — an empty scrubber invites clicks that do nothing. */
+.roll{margin-top:9px; padding-top:9px; border-top:1px solid var(--line)}
+.roll[hidden]{display:none}
+.roll-row{display:flex; align-items:center; gap:10px}
+#tickScrub{flex:1; min-width:0; accent-color:var(--accent); cursor:pointer}
+#tickScrub:focus-visible{outline:2px solid var(--accent); outline-offset:3px}
+#rollNote{margin-top:7px; font-family:var(--font-num); font-size:11.5px;
+  color:var(--ink-3)}
+#speed{background:transparent; border:1px solid var(--line-2); color:var(--ink-2);
+  font-family:var(--font-num); font-size:11.5px; padding:3px 5px; border-radius:6px}
+.play-sm{min-width:64px}
 
 .rail{display:flex; flex-direction:column; gap:18px}
 .panel{background:var(--surface); border:1px solid var(--line); border-radius:var(--radius)}
@@ -168,6 +180,20 @@ tr.taken td{color:var(--accent); font-weight:600}
           <span class="hint" id="think"></span>
           <button class="ghost" id="followBtn" hidden>Follow live</button>
         </div>
+        <div class="roll" id="roll" hidden>
+          <div class="roll-row">
+            <button class="ghost play-sm" id="rollPlay">Replay</button>
+            <input type="range" id="tickScrub" min="0" max="0" value="0" step="1"
+                   aria-label="tick within this drop">
+            <select id="speed" aria-label="playback speed">
+              <option value="1">1&times;</option>
+              <option value="0.5">&frac12;&times;</option>
+              <option value="0.25">&frac14;&times;</option>
+            </select>
+            <button class="ghost" id="rollBack">Close</button>
+          </div>
+          <div id="rollNote"></div>
+        </div>
       </div>
     </div>
 
@@ -210,6 +236,7 @@ tr.taken td{color:var(--accent); font-weight:600}
 const FRUIT = ["#e8453c","#ef6d3f","#a855c9","#f5a02a","#ef7f2a","#dc3b32",
                "#dfd449","#f3a6b6","#f0cf3c","#a9d451","#2f7d33"];
 const LOSE_Y = 84, FLOOR_Y = 912, BOARD_W = 640, BOARD_H = 960;
+const POP_TICKS = 16;          // how long a merge ring stays up, in game ticks
 const EXAMPLE = [[92,872,40,2],[196,880,32,1],[300,848,64,4],[430,872,40,2],
                  [540,856,56,3],[150,800,32,1],[300,720,64,4],[470,790,40,2],
                  [96,812,24,0],[560,780,32,1]];
@@ -217,7 +244,9 @@ const EXAMPLE = [[92,872,40,2],[196,880,32,1],[300,848,64,4],[430,872,40,2],
 const $ = (id) => document.getElementById(id);
 const cv = $("board"), cx = cv.getContext("2d");
 let policies = [], chosenId = null, playingId = null, live = false;
-let following = true, frameCount = 0, viewing = null, ghost = null, simSeq = null;
+let following = true, frameCount = 0, viewing = null, simSeq = null;
+// A loaded rollout: the recorded fall of one candidate, and where we are in it.
+let sim = null, simRaf = null, simSpeed = 1;
 let alive = false, paused = false;
 const SCORE_VALUE = [1,3,6,10,15,21,28,36,45,55,66];
 
@@ -231,7 +260,7 @@ function fruitChip(svg, size, label){
   label.textContent = `size ${size} \u00b7 ${SCORE_VALUE[size]} pts`.replace("size ","#");
 }
 
-function draw(fruits, shortlist, chosen, dim){
+function draw(fruits, shortlist, chosen, dim, pops){
   const w = cv.width, h = cv.height;
   cx.clearRect(0,0,w,h);
   cx.fillStyle = css("--sunk"); cx.fillRect(0,0,w,h);
@@ -255,7 +284,7 @@ function draw(fruits, shortlist, chosen, dim){
     }
   }
 
-  cx.globalAlpha = dim ? .38 : (ghost ? .3 : 1);
+  cx.globalAlpha = dim ? .38 : 1;
   for (const [fx,fy,fr,size] of fruits){
     cx.beginPath(); cx.arc(fx,fy,fr,0,Math.PI*2);
     cx.fillStyle = FRUIT[size] || "#888"; cx.fill();
@@ -263,13 +292,16 @@ function draw(fruits, shortlist, chosen, dim){
   }
   cx.globalAlpha = 1;
 
-  // Where the physics says this candidate actually ends up. Drawn over the
-  // faded present so the difference is what you see.
-  if (ghost){
-    for (const [fx,fy,fr,size] of ghost){
-      cx.beginPath(); cx.arc(fx,fy,fr,0,Math.PI*2);
-      cx.fillStyle = FRUIT[size] || "#888"; cx.fill();
-      cx.lineWidth = 2.5; cx.strokeStyle = css("--accent"); cx.stroke();
+  // A merge is two fruits vanishing and a bigger one appearing, which at
+  // 30 frames a second is easy to miss. The engine reports where and when
+  // each one fired, so each gets a ring that expands and fades from it.
+  if (pops){
+    for (const p of pops){
+      cx.beginPath();
+      cx.arc(p.x, p.y, p.r * (1 + p.age * 0.85), 0, Math.PI*2);
+      cx.globalAlpha = (1 - p.age) * 0.9;
+      cx.lineWidth = 3; cx.strokeStyle = css("--accent"); cx.stroke();
+      cx.globalAlpha = 1;
     }
   }
 }
@@ -366,8 +398,69 @@ function showFrame(f, note){
   $("stageNote").textContent = note;
 }
 
+// ---- replaying one candidate ----------------------------------------
+// The rollout arrives as a list of board snapshots, every SIM_EVERY ticks of
+// the same physics the game runs at 60Hz. Playing them back on that clock is
+// the drop as it would really have happened.
+
+function clearSim(){
+  cancelAnimationFrame(simRaf);
+  sim = null;
+  $("roll").hidden = true;
+}
+
+function renderSim(){
+  if (!sim) return;
+  const tick = sim.idx * sim.every;
+  const pops = sim.merges
+    .filter(m => tick >= m[3] && tick - m[3] < POP_TICKS)
+    .map(m => ({x:m[0], y:m[1], r:m[2], age:(tick - m[3]) / POP_TICKS}));
+  draw(sim.trace[sim.idx], viewing ? viewing.frame.shortlist : null,
+       sim.column, false, pops);
+  $("tickScrub").value = sim.idx;
+  // Points land at the tick their merge fired, so the counter climbs with
+  // the fruit rather than jumping to the total at the end. Each merge carries
+  // its own value — a chain is worth far more at the end than at the start,
+  // so splitting the total evenly across them would be a lie.
+  const pts = sim.merges.reduce((a,m) => a + (m[3] <= tick ? m[4] : 0), 0);
+  $("rollNote").textContent =
+    `column ${sim.column} \u00b7 tick ${tick}/${sim.ticks}`
+    + (sim.gained ? ` \u00b7 ${pts} pts` : "")
+    + (sim.lost && sim.idx === sim.trace.length-1 ? " \u00b7 loses" : "");
+}
+
+function updateRoll(){
+  $("rollPlay").textContent = !sim ? "Play" : sim.playing ? "Pause"
+    : (sim.idx >= sim.trace.length - 1 ? "Replay" : "Play");
+}
+
+function playSim(){
+  if (!sim) return;
+  if (sim.idx >= sim.trace.length - 1) sim.idx = 0;   // replay from the top
+  sim.playing = true; updateRoll();
+  const per = (1000 / 60) * sim.every;      // ms of game time per snapshot
+  let last = performance.now();
+  cancelAnimationFrame(simRaf);
+  (function step(now){
+    if (!sim || !sim.playing) return;
+    const adv = Math.floor((now - last) * simSpeed / per);
+    if (adv > 0){
+      sim.idx = Math.min(sim.idx + adv, sim.trace.length - 1);
+      last += adv * per / simSpeed;
+    }
+    renderSim();
+    if (sim.idx >= sim.trace.length - 1){ sim.playing = false; updateRoll(); return; }
+    simRaf = requestAnimationFrame(step);
+  })(last);
+}
+
+function pauseSim(){
+  if (!sim) return;
+  sim.playing = false; cancelAnimationFrame(simRaf); updateRoll();
+}
+
 async function viewFrame(i){
-  following = false; ghost = null; $("followBtn").hidden = false;
+  following = false; clearSim(); $("followBtn").hidden = false;
   const f = await (await fetch("/api/frame/" + i)).json();
   if (f.error) return;
   viewing = { index: i, frame: f };
@@ -395,11 +488,15 @@ async function simulate(column){
     const out = await p.json();
     if (out.error){ $("simNote").textContent = out.error; return; }
     const c = out.candidates[0];
-    ghost = c.fruits;
-    draw(viewing.frame.fruits, viewing.frame.shortlist, viewing.frame.chosen, false);
+    sim = {column: c.column, trace: c.trace, merges: c.merges || [],
+           every: c.every || 2, gained: c.gained, lost: c.lost,
+           ticks: c.ticks, idx: 0, playing: false};
+    $("tickScrub").max = sim.trace.length - 1;
+    $("roll").hidden = false;
     $("simNote").textContent =
       `column ${c.column}: ${c.gained} pts, settles in ${c.ticks} ticks`
       + (c.lost ? " \u2014 loses the game" : "");
+    playSim();
     return;
   }
   $("simNote").textContent = "the policy did not reach a pause to run it";
@@ -435,7 +532,7 @@ async function poll(){
       viewFrame(frameCount - 1);
     }
     if (!following && frameCount === 0){        // nothing left to look at
-      following = true; viewing = null; ghost = null;
+      following = true; viewing = null; clearSim();
       $("followBtn").hidden = true;
     }
     if (following && (live || s.fruits.length)){
@@ -465,8 +562,23 @@ async function poll(){
 }
 
 $("scrub").addEventListener("input", (e)=>{ viewFrame(parseInt(e.target.value,10)); });
+$("rollPlay").addEventListener("click", ()=>{ sim && sim.playing ? pauseSim() : playSim(); });
+$("tickScrub").addEventListener("input", (e)=>{
+  if (!sim) return;
+  pauseSim();                       // dragging is the viewer taking the clock
+  sim.idx = parseInt(e.target.value,10);
+  renderSim();
+  updateRoll();                     // "Replay" only once it is actually over
+});
+$("speed").addEventListener("change", (e)=>{ simSpeed = parseFloat(e.target.value); });
+$("rollBack").addEventListener("click", ()=>{
+  clearSim();
+  if (viewing) showFrame(viewing.frame,
+    `drop ${viewing.frame.step} of episode ${viewing.frame.episode}`
+    + ` \u00b7 score ${viewing.frame.score.toLocaleString()}`);
+});
 $("followBtn").addEventListener("click", ()=>{
-  following = true; ghost = null; viewing = null;
+  following = true; clearSim(); viewing = null;
   $("followBtn").hidden = true; $("simNote") && ($("simNote").textContent = "");
 });
 
@@ -474,7 +586,7 @@ $("play").addEventListener("click", async ()=>{
   if (!chosenId) return;
   $("play").disabled = true;
   const resuming = paused && chosenId === playingId;
-  following = true; ghost = null; viewing = null; $("followBtn").hidden = true;
+  following = true; clearSim(); viewing = null; $("followBtn").hidden = true;
   if (live){                      // switching: pause the current one first
     await fetch("/api/stop",{method:"POST"});
     for (let i=0;i<40 && live;i++){ await new Promise(r=>setTimeout(r,250)); }

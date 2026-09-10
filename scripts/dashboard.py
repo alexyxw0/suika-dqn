@@ -57,6 +57,10 @@ FRAMES = collections.deque(maxlen=600)
 # Simulation requests from the page. Only the runner thread may touch the
 # browser — Selenium is not safe to call from two threads — so a request is
 # left here and picked up between drops, and the answer left in SIM_RESULT.
+# Every second tick of those rollouts is kept so the drop can be replayed at
+# half the physics rate — 30 snapshots a second, which is as fine as a screen
+# can show and half the payload of every tick.
+SIM_EVERY = 2
 SIM_REQUEST = {"pending": None, "id": 0}
 SIM_RESULT = {"id": -1, "candidates": None, "error": None}
 
@@ -315,10 +319,12 @@ def serve_simulation(env, args):
     try:
         res = env.driver.execute_script(
             "return Game.rollout(arguments[0], arguments[1], arguments[2], "
-            "arguments[3]);",
-            req["xs"], req["size"], 600, req["board"])
+            "arguments[3], arguments[4]);",
+            req["xs"], req["size"], 600, req["board"], SIM_EVERY)
         out = [{"column": c, "fruits": r["fruits"], "gained": r["gained"],
-                "lost": r["lost"], "ticks": r["ticks"]}
+                "lost": r["lost"], "ticks": r["ticks"],
+                "trace": r["trace"], "merges": r["merges"],
+                "every": SIM_EVERY}
                for c, r in zip(req["columns"], res)]
         with LOCK:
             SIM_RESULT.update(id=req["id"], candidates=out, error=None)
