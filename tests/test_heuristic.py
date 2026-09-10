@@ -20,7 +20,7 @@ from heuristic import (BOARD_W, BOARD_WEIGHTS, DROPPABLE, FLOOR_Y,
                        landing_y, ready_pairs, score_all, score_board,
                        score_candidate, trapped_indices, trapped_small)
 
-WEIGHTS = {"merge": 30.0, "chain": 60.0, "low": 200.0, "bury": -8.0,
+WEIGHTS = {"merge": 30.0, "chain": 60.0, "chain_vert": 0.0, "bury": -8.0,
            "stack": 0.0, "trap": 0.0}
 
 
@@ -86,13 +86,14 @@ class TestScoreCandidate:
         _, x = score_candidate(BOARD_W, 4, [], WEIGHTS)
         assert x == BOARD_W - RADII[4]
 
-    def test_landing_lower_is_preferred_when_no_merge_is_on_offer(self):
-        # Sizes chosen so nothing merges and nothing is buried, leaving height
-        # as the only term in play.
+    def test_landing_height_no_longer_enters_the_score(self):
+        """`low` was removed. With nothing merging and nothing buried, a drop
+        onto a tower and a drop onto the open floor now score identically —
+        the placement scorer has no opinion about height at all."""
         tower = [(100, FLOOR_Y - 72, 72, 5), (100, FLOOR_Y - 216, 72, 5)]
         onto_tower, _ = score_candidate(100, 0, tower, WEIGHTS)
         open_floor, _ = score_candidate(500, 0, tower, WEIGHTS)
-        assert open_floor > onto_tower
+        assert onto_tower == pytest.approx(open_floor)
 
     def test_burying_a_much_smaller_fruit_is_penalised(self):
         small = [(100, FLOOR_Y - 24, 24, 0)]
@@ -209,7 +210,7 @@ class TestStackAndTrap:
         board = [(100, FLOOR_Y - RADII[6], RADII[6], 6)]
         with_new, _ = score_candidate(100, 1, board, POLICIES["greedy"])
         legacy = {k: POLICIES["greedy"][k]
-                  for k in ("merge", "chain", "low", "bury")}
+                  for k in ("merge", "chain", "bury")}
         old_way, _ = score_candidate(100, 1, board, legacy)
         assert with_new == pytest.approx(old_way)
 
@@ -363,3 +364,61 @@ class TestTrappedSmall:
                  (355.0, FLOOR_Y - 56, 56.0, 3)]
         assert buried_small(board) == 1
         assert trapped_small(board) == 0
+
+
+class TestVerticalChains:
+    """A merge puts one fruit back where two were, so the stack above it falls.
+    A chain partner underneath is met by that collapse; one beside it has to be
+    reached by rolling. `chain_vert` prices the difference."""
+
+    def _board(self, dx, dy):
+        """A size-0 partner to merge with on the floor, plus a size-1 to chain
+        into, placed dx/dy from where the dropped fruit actually comes to rest
+        — not from the fruit it lands on, which is 48px lower."""
+        r0, r1 = RADII[0], RADII[1]
+        base = [(100.0, float(FLOOR_Y - r0), float(r0), 0)]
+        y = landing_y(100.0, r0, base)
+        return base + [(100.0 + dx, y + dy, float(r1), 1)]
+
+    REACH = RADII[0] + RADII[1]          # centres exactly in contact
+
+    def test_chain_is_direction_blind_at_zero(self):
+        w = dict(WEIGHTS, chain_vert=0.0)
+        below = self._board(0.0, self.REACH)
+        beside = self._board(self.REACH, 0.0)
+        assert score_candidate(100, 0, below, w)[0] == \
+               pytest.approx(score_candidate(100, 0, beside, w)[0])
+
+    def test_the_chain_term_fires_at_all(self):
+        """Guards the rest of this class: if the geometry stopped producing a
+        chain these would all pass by scoring nothing twice."""
+        w = dict(WEIGHTS, chain_vert=0.0)
+        below = self._board(0.0, self.REACH)
+        merge_only = [f for f in below if f[3] == 0]
+        assert score_candidate(100, 0, below, w)[0] > \
+               score_candidate(100, 0, merge_only, w)[0]
+
+    def test_a_vertical_chain_beats_a_level_one(self):
+        w = dict(WEIGHTS, chain_vert=0.8)
+        assert score_candidate(100, 0, self._board(0.0, self.REACH), w)[0] > \
+               score_candidate(100, 0, self._board(self.REACH, 0.0), w)[0]
+
+    def test_at_one_a_level_chain_is_worth_nothing(self):
+        """The chain bonus vanishes, leaving only the merge itself."""
+        w = dict(WEIGHTS, chain_vert=1.0)
+        beside = self._board(self.REACH, 0.0)
+        merge_only = [f for f in beside if f[3] == 0]
+        assert score_candidate(100, 0, beside, w)[0] == \
+               pytest.approx(score_candidate(100, 0, merge_only, w)[0])
+
+    def test_the_best_partner_wins_not_the_first_found(self):
+        """With several chain partners the term takes the most vertical, not
+        whichever the contact scan happened to reach first."""
+        w = dict(WEIGHTS, chain_vert=0.9)
+        r0, r1 = RADII[0], RADII[1]
+        base = [(100.0, float(FLOOR_Y - r0), float(r0), 0)]
+        y = landing_y(100.0, r0, base)
+        level_only = base + [(100.0 + self.REACH, y, float(r1), 1)]
+        both = level_only + [(100.0, y + self.REACH, float(r1), 1)]
+        assert score_candidate(100, 0, both, w)[0] > \
+               score_candidate(100, 0, level_only, w)[0]

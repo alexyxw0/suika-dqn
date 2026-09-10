@@ -51,10 +51,15 @@ SCORES = [1, 3, 6, 10, 15, 21, 28, 36, 45, 55, 66]
 # Named policies. `greedy` is the one measured in runs/FINDINGS.md;
 # `layered` adds the stacking terms. Lookahead is a separate switch, so
 # the four combinations are all reachable.
+#
+# `low` — a reward proportional to how low the fruit lands — used to sit here
+# at 200 and is gone. It was the survival term, and dropping it is a real bet:
+# FINDINGS.md attributes 63% of this policy's advantage over random to episode
+# length rather than points per drop. See finding 9 for what it cost.
 POLICIES = {
-    "greedy": dict(merge=250.0, chain=60.0, low=200.0, bury=-8.0,
+    "greedy": dict(merge=250.0, chain=60.0, chain_vert=0.0, bury=-8.0,
                    stack=0.0, trap=0.0),
-    "layered": dict(merge=250.0, chain=60.0, low=200.0, bury=-8.0,
+    "layered": dict(merge=250.0, chain=60.0, chain_vert=0.6, bury=-8.0,
                     stack=25.0, trap=-20.0),
 }
 
@@ -64,7 +69,7 @@ POLICIES = {
 # it. `gained` is in game points; the rest are shaped to sit alongside them.
 BOARD_WEIGHTS = dict(gained=12.0, lost=-4000.0, top=-900.0, ready=25.0,
                      buried=-12.0)
-WEIGHT_NAMES = ("merge", "chain", "low", "bury", "stack", "trap")
+WEIGHT_NAMES = ("merge", "chain", "chain_vert", "bury", "stack", "trap")
 
 # Reading the board is one script call; doing it per candidate would be 40.
 READ_STATE = """
@@ -157,15 +162,28 @@ def score_candidate(x, cur, fruits, weights):
         value += weights["merge"] * SCORES[cur]
         # And if the merge product would itself touch its own size, that is a
         # chain — worth far more than one merge.
+        #
+        # Not all chains are equal, and the physics is why. A merge deletes two
+        # fruit and puts one back at their midpoint, so the column above it
+        # drops. A partner sitting *below* the new fruit is therefore met by
+        # gravity: the collapse does the work. A partner beside it has to be
+        # reached by rolling, across a surface that just moved, and the engine
+        # decides whether that happens. `chain_vert` prices the difference —
+        # at 0 the term is blind to direction as it was, at 1 a level partner
+        # is worth nothing.
         if cur + 1 < N_SIZES:
             grown = RADII[cur + 1]
+            w_cv = weights.get("chain_vert", 0.0)
+            best = 0.0
             for fx, fy, fr, size in contacts(x, y, grown, fruits):
-                if size == cur + 1:
-                    value += weights["chain"] * SCORES[cur + 1]
-                    break
-
-    # Keeping the pile low is how you survive, and survival is how you score.
-    value += weights["low"] * (y / FLOOR_Y)
+                if size != cur + 1:
+                    continue
+                dist = math.hypot(fx - x, fy - y)
+                # 1 directly above or below, 0 exactly level.
+                vertical = abs(fy - y) / dist if dist > 1e-6 else 1.0
+                best = max(best, 1.0 - w_cv * (1.0 - vertical))
+            if best:
+                value += weights["chain"] * SCORES[cur + 1] * best
 
     # Dropping a big fruit onto much smaller ones buries them where they can
     # never meet a partner.
