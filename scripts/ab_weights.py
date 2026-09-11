@@ -88,7 +88,7 @@ def main() -> int:
 
     browser_dead = browser_failures()
     env = make_env()
-    pairs = []
+    pairs, steps = [], []
     try:
         for i in range(args.episodes):
             seed = args.seed_base + i
@@ -105,10 +105,13 @@ def main() -> int:
                     except browser_dead:
                         env = restart_env(env, make_env)
             if len(got) == 2:
-                pairs.append((got["A"], got["B"]))
-                print(f"    seed {seed}  A {got['A']:6.0f}   B {got['B']:6.0f}"
-                      f"   diff {got['A'] - got['B']:+6.0f}"
-                      f"   (first: {order[0][0]})", flush=True)
+                pairs.append((got["A"][0], got["B"][0]))
+                steps.append((got["A"][1], got["B"][1]))
+                print(f"    seed {seed}  A {got['A'][0]:6.0f}"
+                      f"   B {got['B'][0]:6.0f}"
+                      f"   diff {got['A'][0] - got['B'][0]:+6.0f}"
+                      f"   (drops {got['A'][1]}/{got['B'][1]}"
+                      f", first: {order[0][0]})", flush=True)
             else:
                 print(f"    seed {seed}  incomplete, dropped", flush=True)
     finally:
@@ -127,7 +130,13 @@ def main() -> int:
     se = st.stdev(diffs) / (len(diffs) ** 0.5)
     wins = sum(d > 0 for d in diffs)
 
+    capped = sum(1 for pair in steps for st_ in pair if st_ >= args.max_steps)
     print(f"\n  {len(pairs)} paired seeds")
+    print(f"    mean drops  A {st.mean([s[0] for s in steps]):.0f}"
+          f"   B {st.mean([s[1] for s in steps]):.0f}"
+          + (f"   WARNING: {capped} episode(s) hit the {args.max_steps}-drop "
+             "cap, so the survival difference is truncated" if capped
+             else f"   (no episode reached the {args.max_steps}-drop cap)"))
     print(f"    A  {st.mean(a):7.0f}  (sd {st.stdev(a):.0f})")
     print(f"    B  {st.mean(b):7.0f}  (sd {st.stdev(b):.0f})")
     print(f"    paired difference  {st.mean(diffs):+.0f} +/- {se:.0f} (se)")

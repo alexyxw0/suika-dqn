@@ -53,7 +53,13 @@ BOUNDS = {"chain_vert": (0.0, 1.0)}
 
 
 def play(env, weights, seed, args):
-    """One episode under one weight vector. Returns the final score."""
+    """One episode under one weight vector. Returns (score, drops).
+
+    The drop count matters as much as the score: these policies differ mainly
+    in how long they survive, so an episode that ended on `--max-steps` rather
+    than on a loss has had the difference truncated out of it. A caller that
+    cannot see the cap binding cannot tell a null from a ceiling.
+    """
     env.reset(seed=seed)
     score, steps = 0.0, 0
     bins = np.linspace(0.0, 1.0, args.actions)
@@ -70,7 +76,7 @@ def play(env, weights, seed, args):
         steps += 1
         if done or trunc:
             break
-    return score
+    return score, steps
 
 
 def evaluate(env, weights, seeds, args, browser_dead, make_env):
@@ -89,7 +95,7 @@ def evaluate(env, weights, seeds, args, browser_dead, make_env):
     for seed in seeds:
         for attempt in range(2):
             try:
-                out[seed] = play(env, weights, seed, args)
+                out[seed] = play(env, weights, seed, args)[0]
                 break
             except browser_dead:
                 env = restart(env, make_env)

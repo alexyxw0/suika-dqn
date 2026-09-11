@@ -103,7 +103,7 @@ def main() -> int:
                 for seed in seeds:
                     for attempt in range(2):
                         try:
-                            got.append(play(env, w, seed, args))
+                            got.append(play(env, w, seed, args)[0])
                             break
                         except browser_dead:
                             env = restart_env(env, make_env)
