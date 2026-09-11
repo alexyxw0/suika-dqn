@@ -74,27 +74,58 @@ def play(env, weights, seed, args):
 
 
 def evaluate(env, weights, seeds, args, browser_dead, make_env):
-    """Mean score over `seeds`. A crashed episode is replayed once, then
-    dropped — Chrome loses the tab on crowded boards, which are the
-    high-scoring ones, so discarding them silently would bias every candidate
-    that survives towards the low side."""
-    scores = []
+    """Score per seed, as a dict. A crashed episode is replayed once and then
+    given up on — Chrome loses the tab on crowded boards, which are the
+    high-scoring ones, so a crash is not a random omission.
+
+    Returning per-seed rather than a mean is what lets the caller keep the
+    comparison paired. Candidates in an iteration share seeds precisely so the
+    difference between them is measured on the same games; a candidate that
+    lost one seed to a crash and is then compared on its mean of three against
+    everyone else's mean of four has quietly become an unpaired comparison, on
+    the seeds that happen to be missing.
+    """
+    out = {}
     for seed in seeds:
         for attempt in range(2):
             try:
-                scores.append(play(env, weights, seed, args))
+                out[seed] = play(env, weights, seed, args)
                 break
             except browser_dead:
                 env = restart(env, make_env)
                 if attempt:
-                    print("      (crashed twice, skipping this seed)",
+                    print(f"      (seed {seed} crashed twice, dropped)",
                           flush=True)
-    return (float(np.mean(scores)) if scores else 0.0), env
+    return out, env
+
+
+def paired_means(results):
+    """Mean per candidate over the seeds *every* candidate finished.
+
+    If crashes took different seeds from different candidates, the common set
+    is what can honestly be compared. Falls back to each candidate's own mean
+    when nothing is shared, which only happens if the browser is failing badly
+    enough that the iteration is worthless anyway.
+    """
+    common = set.intersection(*(set(r) for r in results)) if results else set()
+    if not common:
+        return [float(np.mean(list(r.values()))) if r else 0.0
+                for r in results], 0
+    return [float(np.mean([r[s] for s in common])) for r in results], len(common)
 
 
 def restart(env, make_env):
     from agent import restart_env
     return restart_env(env, make_env)
+
+
+def stderr(values):
+    """Standard error of the mean. 0 for fewer than two values — not because
+    the estimate is precise, but because there is nothing to estimate it from,
+    and the caller prints the n beside it."""
+    if len(values) < 2:
+        return 0.0
+    return float(np.std(values, ddof=1) / np.sqrt(len(values)))
 
 
 def vector(weights):
@@ -164,9 +195,12 @@ def main() -> int:
         print(f"  start {args.start}: "
               + "  ".join(f"{n}={v:g}" for n, v in zip(WEIGHT_NAMES, mu)),
               flush=True)
-        base, env = evaluate(env, unvector(mu), holdout_seeds, args,
-                             browser_dead, make_env)
-        print(f"  baseline on the {args.holdout} held-out seeds: {base:.0f}\n",
+        base_by_seed, env = evaluate(env, unvector(mu), holdout_seeds, args,
+                                     browser_dead, make_env)
+        base_scores = list(base_by_seed.values())
+        base = float(np.mean(base_scores)) if base_scores else 0.0
+        print(f"  baseline on the {args.holdout} held-out seeds: {base:.0f}"
+              f" +/- {stderr(base_scores):.0f} (se, n={len(base_scores)})\n",
               flush=True)
 
         for it in range(args.iterations):
@@ -176,28 +210,39 @@ def main() -> int:
             seeds = [int(s) for s in rng.integers(0, 10**6, size=args.episodes)]
             samples = [mu] + [mu + sigma * rng.standard_normal(len(mu))
                               for _ in range(args.population - 1)]
-            scored = []
+            per_seed = []
             for i, cand in enumerate(samples):
-                w = unvector(cand)
-                mean, env = evaluate(env, w, seeds, args, browser_dead,
-                                     make_env)
-                scored.append((mean, cand))
-                print(f"    iter {it}  cand {i:2d}  {mean:7.0f}", flush=True)
+                res, env = evaluate(env, unvector(cand), seeds, args,
+                                    browser_dead, make_env)
+                per_seed.append(res)
+                got = list(res.values())
+                print(f"    iter {it}  cand {i:2d}  "
+                      f"{np.mean(got) if got else 0:7.0f}"
+                      f"  (n={len(got)})", flush=True)
 
+            means, shared = paired_means(per_seed)
+            if shared < len(seeds):
+                print(f"    ranking on the {shared} seed(s) every candidate "
+                      f"finished, of {len(seeds)}", flush=True)
+            scored = list(zip(means, samples))
             scored.sort(key=lambda t: -t[0])
             elite = np.array([c for _s, c in scored[:args.elite]])
             mu = elite.mean(axis=0)
             floor = args.noise * scale / (it + 1)
             sigma = np.maximum(elite.std(axis=0), floor)
 
-            held, env = evaluate(env, unvector(mu), holdout_seeds, args,
-                                 browser_dead, make_env)
+            held_by_seed, env = evaluate(env, unvector(mu), holdout_seeds,
+                                         args, browser_dead, make_env)
+            held_scores = list(held_by_seed.values())
+            held = float(np.mean(held_scores)) if held_scores else 0.0
             history.append({"iteration": it,
                             "elite_mean_on_train": float(scored[0][0]),
                             "holdout": held,
+                            "holdout_se": stderr(held_scores),
+                            "holdout_n": len(held_scores),
                             "weights": unvector(mu)})
             print(f"  iter {it}: best-on-train {scored[0][0]:.0f}   "
-                  f"HELD OUT {held:.0f}   "
+                  f"HELD OUT {held:.0f} +/- {stderr(held_scores):.0f}   "
                   f"({(time.time() - began) / 60:.0f} min)\n", flush=True)
     finally:
         try:
@@ -209,17 +254,19 @@ def main() -> int:
     args.out.parent.mkdir(parents=True, exist_ok=True)
     args.out.write_text(json.dumps(
         {"weights": final, "baseline_holdout": base, "history": history,
+         "baseline_holdout_se": stderr(base_scores),
          "args": {k: str(v) for k, v in vars(args).items()}}, indent=2))
 
     print("  final weights: "
           + "  ".join(f"{n}={final[n]:.3g}" for n in WEIGHT_NAMES))
     if history:
         best = max(history, key=lambda h: h["holdout"])
-        print(f"  best held-out {best['holdout']:.0f} at iteration "
-              f"{best['iteration']}, against a baseline of {base:.0f}")
-        print("  (both on the same seeds; the gap is what CEM bought, and "
-              f"with {args.holdout} episodes it is worth about "
-              f"+/-{2 * 900 / np.sqrt(args.holdout):.0f})")
+        print(f"  best held-out {best['holdout']:.0f} +/- {best['holdout_se']:.0f}"
+              f" at iteration {best['iteration']}, against a baseline of "
+              f"{base:.0f} +/- {stderr(base_scores):.0f}")
+        print("  Both are means over the same held-out seeds, so the gap is "
+              "paired; treat it as real only if it clears about twice the "
+              "larger of the two standard errors.")
     print(f"  written to {args.out}")
     return 0
 
