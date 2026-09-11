@@ -317,6 +317,118 @@ survival, which the numbers above say is where the points are.
 exchange rate `BOARD_WEIGHTS` already used (`gained=12`, `buried=-12`). Whether
 it moves the final number needs a training run that has not been done.
 
+### 9. The weights were never the problem; one missing feature was
+
+CEM was re-run on the six placement weights and found nothing, as it had three
+times before. This time the reason was measured rather than inferred.
+
+`scripts/check_fitness_noise.py` scores the same eight candidates twice, on
+disjoint seed sets, and correlates the two rankings. Reasoning from a single
+generation's spread cannot settle this, because common random numbers lower the
+null as well as the signal; test-retest does not care.
+
+    per-episode sd                          458
+    sd of a 4-episode mean (noise)          229
+    sd between candidate means              222
+    implied true sd between candidates        0
+
+    Spearman A vs B   -0.02      Pearson A vs B   -0.10
+
+The spread between candidates is entirely accounted for by noise. The ranking
+CEM selects on has no relationship to the ranking the same candidates get on
+fresh games, so the elite of each generation were the lucky ones.
+
+The decomposition says something more useful than "too noisy": **more episodes
+would not have helped.** If real differences were merely hidden, the observed
+spread would exceed the noise floor; it does not. Perturbing these six weights
+by ±35% produces policies that are equally good. CEM was searching a plateau.
+(A true sd of exactly zero is a clipped estimate — the subtraction went
+negative — so the defensible claim is that any difference is under ~100 points,
+against 400-point swings from fruit luck.)
+
+That turns the question from weights to features. `low` — a linear reward for
+landing low — was removed, and two terms added: `danger`, flat until the pile
+enters a band below the lose line and then rising as a cube, because a board is
+fine until it is nearly full and then fatal; and `order`, rewarding the *change*
+a drop makes to the board's size/x correlation, the structure of big fruit
+gathered at one end with sizes descending away from it.
+
+Measured with `scripts/ab_weights.py` — both arms on the same seeds, arms
+alternating seed by seed, reporting the mean of per-seed differences:
+
+| comparison | paired difference | won | p |
+|---|---|---|---|
+| `danger`+`order` vs neither | **+454 ± 171** | 12/16 | 0.008 |
+| `order` on top of `danger` | **+426 ± 120** | 13/16 | 0.0004 |
+| `danger` on top of `order` | +330 ± 167 | 11/16 | 0.05 |
+
+`order` is the effect, and it is the largest single gain measured here since the
+column-aligned head. It survives both artifacts this document has recorded
+before: each result holds in both halves of its run and under both arm
+orderings, and the sign tests agree.
+
+`danger` sits exactly on the line: +330 against a standard error of 167, which
+is 1.98 of them. An earlier reading of this table subtracted across different
+seed sets and made it look like nothing (+28); that was wrong, and the direct
+comparison is what this row reports. Kept, unresolved — resolving it would take
+the ~37 seeds the table below prices at 1.8 hours, for a term that costs
+nothing to leave in.
+
+Re-measured at the settings the rest of this document uses, over 20 seeds:
+**2835 ± 88**, against **2582 ± 82** for the same policy before `order`. That
+matches `hand-written + rollout` (2826 ± 80) using one closed-form pass per drop
+instead of five physics simulations.
+
+70% of those episodes reached the 300-drop cap, which looked like a truncated
+measurement. It was not: re-run with the cap at 800 the same policy scores
+**2775 ± 102**, indistinguishable, because games rarely want to run much past
+300 (mean 282 drops, longest 355, only 6 of 20 over 300).
+
+### 10. Replaying a seed does not reproduce the game
+
+Found while trying to pair the capped and uncapped runs above. Same policy, same
+seed, only the step cap different — so any episode that never reached the cap
+should have been an identical run. None were:
+
+| seed | capped at 300 | capped at 800 |
+|---|---|---|
+| 80002 | 2225 / 243 drops | 2066 / 232 |
+| 80006 | 2056 / 214 | **3597 / 355** |
+| 80009 | 2315 / 253 | 2916 / 284 |
+| 80012 | 2504 / 258 | 2536 / 262 |
+
+Zero of four matched, one by 1541 points.
+
+The cause is the settle wait. `read_state` waits up to 1000 **milliseconds of
+wall clock** for the board to stop moving, and about 3% of drops never settle
+inside that — on those the policy acts on a board still in motion, which board
+it sees depends on how busy the machine is, and the game diverges from there.
+The seed fixes the fruit sequence and nothing else.
+
+What this does *not* affect: every paired difference above. Those are computed
+from observed per-seed differences with the standard error estimated from the
+same differences, so this nondeterminism is already inside the ±.
+
+What it does affect: the reason pairing helps so little. It had been attributed
+to two *different* policies diverging; in fact **a policy diverges from itself**.
+Measured correlation between arms on the same seed: **+0.32**, cutting the
+difference sd from 710 to only 588.
+
+The fix is to make the wait deterministic — settle on a physics tick count
+rather than a wall-clock budget — which would make seeds reproduce and sharpen
+every paired comparison in this document. Not yet done.
+
+| effect to resolve | paired seeds | episodes | wall clock |
+|---|---|---|---|
+| 400 points | 9 | 18 | ~25 min |
+| 200 points | 37 | 74 | ~1.8 h |
+| 100 points | 147 | 294 | ~7 h |
+
+Anything worth under ~200 points is effectively unmeasurable in an afternoon on
+this machine. That, not the optimiser and not the policy class, is what limits
+the rate this project can learn anything — and it is why the right move is to
+chase changes large enough to see rather than to tune.
+
 ## What would plausibly move it
 
 The heuristic never simulates — it estimates where a fruit lands and never
@@ -337,3 +449,5 @@ teacher and a re-clone, which has never been run.
     python scripts/pretrain.py                                   # ~5 min
     python scripts/eval_policy.py --checkpoint runs/bc.h5 --episodes 25
     python scripts/check_trapped.py --boards 6                   # the table in 8
+    python scripts/check_fitness_noise.py                        # why CEM finds nothing
+    python scripts/ab_weights.py --episodes 16 --b order=0       # what `order` is worth

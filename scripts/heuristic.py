@@ -566,7 +566,8 @@ def main() -> int:
         print(f"  board was still moving on {100*waited_n/drops:.1f}% of "
               f"drops ({waited_total/max(waited_n,1):.0f} ms of extra wait "
               f"each); {100*stale/drops:.1f}% never settled within the cap")
-    print("  reference: random 1424 | DQN from scratch 1455 | cloned 2449 | greedy 2497 | layered 2696")
+    print("  reference: random 1424 | DQN from scratch 1455 | cloned 2449 | "
+          "greedy 2497 | layered before `order` 2582 | layered 2835")
     return 0
 
 
