@@ -34,6 +34,10 @@ envpath.ensure()
 
 FLOOR_Y = 912          # top of the floor body
 BOARD_W = 640
+LOSE_Y = 84            # `loseHeight` in the game: a fruit resting above this loses
+# How far below the lose line the danger term starts to bite. Anything lower
+# than this is simply "not near the top" and priced at zero.
+DANGER_BAND = 340.0
 N_SIZES = 11
 # Game.fruitSizes radii and score values, read from the game.
 RADII = [24, 32, 40, 56, 64, 72, 84, 96, 128, 160, 192]
@@ -58,9 +62,9 @@ SCORES = [1, 3, 6, 10, 15, 21, 28, 36, 45, 55, 66]
 # length rather than points per drop. See finding 9 for what it cost.
 POLICIES = {
     "greedy": dict(merge=250.0, chain=60.0, chain_vert=0.0, bury=-8.0,
-                   stack=0.0, trap=0.0),
+                   stack=0.0, trap=0.0, danger=0.0, order=0.0),
     "layered": dict(merge=250.0, chain=60.0, chain_vert=0.6, bury=-8.0,
-                    stack=25.0, trap=-20.0),
+                    stack=25.0, trap=-20.0, danger=-900.0, order=30.0),
 }
 
 # Scoring a *settled* board rather than a placement. Only reachable with
@@ -69,7 +73,8 @@ POLICIES = {
 # it. `gained` is in game points; the rest are shaped to sit alongside them.
 BOARD_WEIGHTS = dict(gained=12.0, lost=-4000.0, top=-900.0, ready=25.0,
                      buried=-12.0)
-WEIGHT_NAMES = ("merge", "chain", "chain_vert", "bury", "stack", "trap")
+WEIGHT_NAMES = ("merge", "chain", "chain_vert", "bury", "stack", "trap",
+                "danger", "order")
 
 # Reading the board is one script call; doing it per candidate would be 40.
 READ_STATE = """
@@ -145,6 +150,25 @@ def contacts(x, y, r, fruits, slack=6.0):
     return out
 
 
+def size_gradient(xs, sizes):
+    """How strongly size trends across the board, as a correlation in [-1, 1].
+
+    The structure a strong player builds is a gradient: the big fruit gathered
+    at one end with sizes descending away from it, so a new small fruit always
+    has somewhere to go and the big ones are never in the way. Which end does
+    not matter, so callers take the absolute value — the term rewards
+    sharpening whichever lean the board already has rather than imposing a
+    direction on it.
+    """
+    if len(xs) < 4:
+        return 0.0
+    xs = np.asarray(xs, dtype=np.float64)
+    sizes = np.asarray(sizes, dtype=np.float64)
+    if xs.std() < 1e-9 or sizes.std() < 1e-9:
+        return 0.0
+    return float(np.corrcoef(xs, sizes)[0, 1])
+
+
 def score_candidate(x, cur, fruits, weights):
     """How good dropping the current fruit at x looks."""
     r = RADII[cur]
@@ -184,6 +208,34 @@ def score_candidate(x, cur, fruits, weights):
                 best = max(best, 1.0 - w_cv * (1.0 - vertical))
             if best:
                 value += weights["chain"] * SCORES[cur + 1] * best
+
+    # Survival, priced the way it actually behaves. `low` used to be a reward
+    # proportional to how low the fruit landed — linear across the whole board,
+    # which says a drop at mid-height is meaningfully worse than one at the
+    # floor. It is not; the board is fine until it is nearly full and then it
+    # is fatal. This is flat until the pile enters the band below the lose
+    # line and then rises as a cube, so it costs nothing to stack normally and
+    # a great deal to stack when there is no room left.
+    w_danger = weights.get("danger", 0.0)
+    if w_danger:
+        top = y - r
+        for _fx, fy, fr, _s in fruits:
+            top = min(top, fy - fr)
+        closeness = max(0.0, 1.0 - (top - LOSE_Y) / DANGER_BAND)
+        value += w_danger * closeness ** 3
+
+    # Big fruit gathered at one end, sizes descending away from it. Scored as
+    # the change this drop makes to the board's existing gradient, not its
+    # absolute value: an absolute score would mostly measure what the board
+    # already is, which no single drop can move, and drown the part the
+    # decision controls.
+    w_order = weights.get("order", 0.0)
+    if w_order and len(fruits) >= 4:
+        xs = [f[0] for f in fruits]
+        sizes = [f[3] for f in fruits]
+        before = abs(size_gradient(xs, sizes))
+        after = abs(size_gradient(xs + [x], sizes + [cur]))
+        value += w_order * (after - before) * 100.0
 
     # Dropping a big fruit onto much smaller ones buries them where they can
     # never meet a partner.

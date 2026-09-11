@@ -15,10 +15,11 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "scripts"))
 
 import numpy as np
 
-from heuristic import (BOARD_W, BOARD_WEIGHTS, DROPPABLE, FLOOR_Y,
-                       POLICIES, RADII, buried_small, choose, contacts,
-                       landing_y, ready_pairs, score_all, score_board,
-                       score_candidate, trapped_indices, trapped_small)
+from heuristic import (BOARD_W, BOARD_WEIGHTS, DANGER_BAND, DROPPABLE,
+                       FLOOR_Y, LOSE_Y, POLICIES, RADII, buried_small, choose,
+                       contacts, landing_y, ready_pairs, score_all,
+                       score_board, score_candidate, size_gradient,
+                       trapped_indices, trapped_small)
 
 WEIGHTS = {"merge": 30.0, "chain": 60.0, "chain_vert": 0.0, "bury": -8.0,
            "stack": 0.0, "trap": 0.0}
@@ -422,3 +423,90 @@ class TestVerticalChains:
         both = level_only + [(100.0, y + self.REACH, float(r1), 1)]
         assert score_candidate(100, 0, both, w)[0] > \
                score_candidate(100, 0, level_only, w)[0]
+
+
+class TestDangerTerm:
+    """`low` priced height linearly across the whole board, which says a drop
+    at mid-height is meaningfully worse than one at the floor. It is not. This
+    is flat until the pile nears the lose line and then rises as a cube."""
+
+    W = dict(merge=0.0, chain=0.0, chain_vert=0.0, bury=0.0, stack=0.0,
+             trap=0.0, danger=-900.0, order=0.0)
+
+    def _pile_to(self, top_y):
+        """One fruit whose top edge sits at `top_y`."""
+        r = RADII[8]
+        return [(320.0, float(top_y + r), float(r), 8)]
+
+    def test_a_low_board_costs_nothing(self):
+        board = self._pile_to(FLOOR_Y - 200)
+        assert score_candidate(60, 0, board, self.W)[0] == pytest.approx(0.0)
+
+    def test_it_bites_near_the_lose_line(self):
+        assert score_candidate(60, 0, self._pile_to(LOSE_Y + 20),
+                               self.W)[0] < -500
+
+    def test_it_rises_faster_than_linearly(self):
+        """Halving the remaining margin must more than double the cost —
+        otherwise it is just `low` again under a different name."""
+        band = DANGER_BAND
+        far = -score_candidate(60, 0, self._pile_to(LOSE_Y + band * 0.5),
+                               self.W)[0]
+        near = -score_candidate(60, 0, self._pile_to(LOSE_Y + band * 0.25),
+                                self.W)[0]
+        assert near > 2 * far > 0
+
+    def test_the_dropped_fruit_counts_towards_the_pile(self):
+        """A drop that is itself the new highest thing must be priced, even on
+        an otherwise empty board."""
+        w = dict(self.W)
+        tall = [(320.0, float(LOSE_Y + 2 * RADII[9]), float(RADII[9]), 9)]
+        onto = score_candidate(320, 0, tall, w)[0]
+        assert onto < 0
+
+    def test_weight_zero_removes_it(self):
+        w = dict(self.W, danger=0.0)
+        assert score_candidate(60, 0, self._pile_to(LOSE_Y + 5), w)[0] == \
+            pytest.approx(0.0)
+
+
+class TestSizeOrdering:
+    """Big fruit gathered at one end with sizes descending away from it. Scored
+    as the change a drop makes to the board's gradient, not its level."""
+
+    W = dict(merge=0.0, chain=0.0, chain_vert=0.0, bury=0.0, stack=0.0,
+             trap=0.0, danger=0.0, order=30.0)
+
+    ASCENDING = [(80.0, FLOOR_Y - 24, 24.0, 0), (200.0, FLOOR_Y - 32, 32.0, 1),
+                 (360.0, FLOOR_Y - 40, 40.0, 2), (520.0, FLOOR_Y - 56, 56.0, 3)]
+
+    def test_gradient_is_one_when_perfectly_sorted(self):
+        assert size_gradient([0, 1, 2, 3, 4], [0, 1, 2, 3, 4]) == \
+            pytest.approx(1.0)
+
+    def test_gradient_is_signed_so_either_end_can_be_the_big_one(self):
+        assert size_gradient([0, 1, 2, 3, 4], [4, 3, 2, 1, 0]) == \
+            pytest.approx(-1.0)
+
+    def test_too_few_fruit_to_speak_of_a_gradient(self):
+        assert size_gradient([0, 1], [0, 1]) == 0.0
+
+    def test_a_drop_that_sharpens_the_gradient_scores_better(self):
+        """On a board where size rises with x, a big fruit belongs at the big
+        end, not the small one."""
+        right, _ = score_candidate(620, 4, self.ASCENDING, self.W)
+        left, _ = score_candidate(20, 4, self.ASCENDING, self.W)
+        assert right > left
+
+    def test_it_does_not_impose_a_direction(self):
+        """The mirrored board must prefer the mirrored drop by the same
+        amount — the term rewards whichever lean the board already has."""
+        mirrored = [(BOARD_W - x, y, r, s) for x, y, r, s in self.ASCENDING]
+        a, _ = score_candidate(620, 4, self.ASCENDING, self.W)
+        b, _ = score_candidate(BOARD_W - 620, 4, mirrored, self.W)
+        assert a == pytest.approx(b)
+
+    def test_weight_zero_removes_it(self):
+        w = dict(self.W, order=0.0)
+        assert score_candidate(620, 4, self.ASCENDING, w)[0] == \
+            pytest.approx(score_candidate(20, 4, self.ASCENDING, w)[0])
