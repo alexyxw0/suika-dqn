@@ -72,7 +72,7 @@ POLICIES = {
 # these terms can read the board that actually results instead of a guess at
 # it. `gained` is in game points; the rest are shaped to sit alongside them.
 BOARD_WEIGHTS = dict(gained=12.0, lost=-4000.0, top=-900.0, ready=25.0,
-                     buried=-12.0)
+                     buried=-12.0, order=30.0)
 WEIGHT_NAMES = ("merge", "chain", "chain_vert", "bury", "stack", "trap",
                 "danger", "order")
 
@@ -379,6 +379,18 @@ def score_board(result, weights):
         value += weights["top"] * max(0.0, 1.0 - highest / FLOOR_Y)
     value += weights["ready"] * ready_pairs(fruits)
     value += weights["buried"] * buried_small(fruits)
+
+    # The size gradient, measured on the board the physics actually produced
+    # rather than on a guess at it. `score_candidate` has to score this as a
+    # *change* — it is ranking placements, and the board's existing gradient is
+    # a constant it cannot move, which would swamp the part the drop controls.
+    # Here it can be absolute: every candidate is scored as a whole board and
+    # they all descend from the same position, so the shared part cancels in
+    # the comparison and only the difference each drop made survives.
+    w_order = weights.get("order", 0.0)
+    if w_order and fruits:
+        value += w_order * abs(size_gradient([f[0] for f in fruits],
+                                             [f[3] for f in fruits])) * 100.0
     return value
 
 

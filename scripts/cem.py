@@ -52,7 +52,7 @@ from heuristic import (BOARD_WEIGHTS, POLICIES, WEIGHT_NAMES,      # noqa: E402
 BOUNDS = {"chain_vert": (0.0, 1.0)}
 
 
-def play(env, weights, seed, args):
+def play(env, weights, seed, args, board_weights=None):
     """One episode under one weight vector. Returns (score, drops).
 
     The drop count matters as much as the score: these policies differ mainly
@@ -67,7 +67,8 @@ def play(env, weights, seed, args):
         state = read_state(env, args.settle_wait)
         if args.rollout:
             action = choose_by_rollout(env, state, args.actions, weights,
-                                       BOARD_WEIGHTS, args.rollout)
+                                       board_weights or BOARD_WEIGHTS,
+                                       args.rollout)
         else:
             action = choose(state, args.actions, weights)
         _obs, _r, done, trunc, info = env.step(

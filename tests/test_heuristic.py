@@ -510,3 +510,48 @@ class TestSizeOrdering:
         w = dict(self.W, order=0.0)
         assert score_candidate(620, 4, self.ASCENDING, w)[0] == \
             pytest.approx(score_candidate(20, 4, self.ASCENDING, w)[0])
+
+
+class TestOrderInScoreBoard:
+    """The rollout path scores whole settled boards, so `order` enters
+    absolutely here rather than as a delta: every candidate descends from the
+    same position, so the shared part of the gradient cancels in the
+    comparison and only what the drop changed survives."""
+
+    def _result(self, fruits, gained=0, lost=False):
+        return {"fruits": fruits, "gained": gained, "lost": lost}
+
+    SORTED = [(80.0, FLOOR_Y - 24, 24.0, 0), (200.0, FLOOR_Y - 32, 32.0, 1),
+              (360.0, FLOOR_Y - 40, 40.0, 2), (520.0, FLOOR_Y - 56, 56.0, 3)]
+    JUMBLED = [(80.0, FLOOR_Y - 40, 40.0, 2), (200.0, FLOOR_Y - 24, 24.0, 0),
+               (360.0, FLOOR_Y - 56, 56.0, 3), (520.0, FLOOR_Y - 32, 32.0, 1)]
+
+    def test_a_graded_board_scores_above_a_jumbled_one(self):
+        w = dict(BOARD_WEIGHTS)
+        assert score_board(self._result(self.SORTED), w) > \
+               score_board(self._result(self.JUMBLED), w)
+
+    def test_weight_zero_makes_them_equal(self):
+        """The two boards are built to match on every other term, so with
+        order off they must score identically — otherwise this class is
+        measuring something else."""
+        w = dict(BOARD_WEIGHTS, order=0.0)
+        assert score_board(self._result(self.SORTED), w) == \
+               pytest.approx(score_board(self._result(self.JUMBLED), w))
+
+    def test_either_end_may_be_the_big_end(self):
+        w = dict(BOARD_WEIGHTS)
+        mirrored = [(BOARD_W - x, y, r, s) for x, y, r, s in self.SORTED]
+        assert score_board(self._result(mirrored), w) == \
+               pytest.approx(score_board(self._result(self.SORTED), w))
+
+    def test_an_empty_board_does_not_raise(self):
+        assert isinstance(score_board(self._result([]), dict(BOARD_WEIGHTS)),
+                          float)
+
+    def test_it_does_not_overpower_losing(self):
+        """A perfectly graded board that loses must still rank below a jumbled
+        one that does not. `lost` is -4000 and order tops out at 30*100."""
+        w = dict(BOARD_WEIGHTS)
+        assert score_board(self._result(self.SORTED, lost=True), w) < \
+               score_board(self._result(self.JUMBLED), w)

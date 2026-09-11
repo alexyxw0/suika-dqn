@@ -37,18 +37,32 @@ import envpath                                                     # noqa: E402
 envpath.ensure()
 
 from cem import play                                               # noqa: E402
-from heuristic import POLICIES, WEIGHT_NAMES                       # noqa: E402
+from heuristic import BOARD_WEIGHTS, POLICIES, WEIGHT_NAMES        # noqa: E402
 
 
 def overrides(base, pairs):
-    w = dict(base)
+    """Apply `name=value` overrides, splitting placement from board weights.
+
+    A `board.` prefix targets the weights used to score a *simulated settled
+    board* under --rollout; everything else targets the placement estimate.
+    They are separate dictionaries with separate scales, and silently applying
+    one to the other would run an arm that looks configured and is not.
+    """
+    w, board = dict(base), dict(BOARD_WEIGHTS)
     for item in pairs or []:
         name, _, value = item.partition("=")
-        if name not in WEIGHT_NAMES:
-            raise SystemExit(f"unknown weight {name!r}; "
-                             f"expected one of {', '.join(WEIGHT_NAMES)}")
-        w[name] = float(value)
-    return w
+        if name.startswith("board."):
+            key = name[len("board."):]
+            if key not in BOARD_WEIGHTS:
+                raise SystemExit(f"unknown board weight {key!r}; expected one "
+                                 f"of {', '.join(sorted(BOARD_WEIGHTS))}")
+            board[key] = float(value)
+        elif name in WEIGHT_NAMES:
+            w[name] = float(value)
+        else:
+            raise SystemExit(f"unknown weight {name!r}; expected one of "
+                             f"{', '.join(WEIGHT_NAMES)} or a board.* weight")
+    return w, board
 
 
 def main() -> int:
@@ -68,19 +82,46 @@ def main() -> int:
     ap.add_argument("--rollout", type=int, default=0)
     ap.add_argument("--port", type=int, default=8997)
     ap.add_argument("--seed-base", type=int, default=70000)
+    ap.add_argument("--fresh-browser", action="store_true",
+                    help="reopen the browser between the two arms of a seed, "
+                         "not just between seeds. Costs ~20s a switch and "
+                         "removes anything the first arm leaves behind — the "
+                         "scratch physics engine is reused across rollouts by "
+                         "design, so under --rollout the first arm pushes "
+                         "thousands of simulated drops through it before the "
+                         "second arm starts")
+    ap.add_argument("--null", action="store_true",
+                    help="a control: run arm A's weights in BOTH positions. "
+                         "Any difference it reports is the harness's own bias, "
+                         "since the two arms are the same policy. Run this "
+                         "before believing a result near the noise floor")
     args = ap.parse_args()
 
     from agent import browser_failures, restart_env
     from suika_env.suika_browser_env import SuikaBrowserEnv
 
-    wa = overrides(POLICIES[args.policy], args.a)
-    wb = overrides(POLICIES[args.policy], args.b)
+    wa, ba = overrides(POLICIES[args.policy], args.a)
+    wb, bb = overrides(POLICIES[args.policy], args.b)
+    if args.null:
+        # Same policy in both positions. What comes back should be zero; what
+        # it actually is, is the bias every other result here is sitting on.
+        wb, bb = dict(wa), dict(ba)
+        print("  NULL CONTROL: both arms are arm A. A real effect here is a "
+              "bug in the harness, not in the policy.\n", flush=True)
     differing = [n for n in WEIGHT_NAMES if wa[n] != wb[n]]
-    if not differing:
+    differing_board = [n for n in sorted(BOARD_WEIGHTS) if ba[n] != bb[n]]
+    if not differing and not differing_board and not args.null:
         raise SystemExit("A and B are the same weights; nothing to compare")
-    print("  A: " + "  ".join(f"{n}={wa[n]:g}" for n in differing))
-    print("  B: " + "  ".join(f"{n}={wb[n]:g}" for n in differing) + "\n",
-          flush=True)
+    if differing_board and not args.rollout:
+        raise SystemExit("board weights only apply under --rollout K; "
+                         "as run, the two arms would be identical")
+    def show(label, w, b):
+        parts = [f"{n}={w[n]:g}" for n in differing]
+        parts += [f"board.{n}={b[n]:g}" for n in differing_board]
+        print(f"  {label}: " + "  ".join(parts))
+    show("A", wa, ba)
+    show("B", wb, bb)
+    print("", flush=True)
 
     def make_env():
         return SuikaBrowserEnv(headless=True, port=args.port,
@@ -88,23 +129,26 @@ def main() -> int:
 
     browser_dead = browser_failures()
     env = make_env()
-    pairs, steps = [], []
+    pairs, steps, first = [], [], []
     try:
         for i in range(args.episodes):
             seed = args.seed_base + i
             # Alternate which arm goes first, so an effect of playing second
             # cancels across seeds instead of loading onto one arm.
-            order = [("A", wa), ("B", wb)] if i % 2 == 0 else \
-                    [("B", wb), ("A", wa)]
+            order = [("A", wa, ba), ("B", wb, bb)] if i % 2 == 0 else \
+                    [("B", wb, bb), ("A", wa, ba)]
             got = {}
-            for label, w in order:
+            for position, (label, w, board) in enumerate(order):
+                if args.fresh_browser and position:
+                    env = restart_env(env, make_env)
                 for attempt in range(2):
                     try:
-                        got[label] = play(env, w, seed, args)
+                        got[label] = play(env, w, seed, args, board)
                         break
                     except browser_dead:
                         env = restart_env(env, make_env)
             if len(got) == 2:
+                first.append(order[0][0])
                 pairs.append((got["A"][0], got["B"][0]))
                 steps.append((got["A"][1], got["B"][1]))
                 print(f"    seed {seed}  A {got['A'][0]:6.0f}"
@@ -144,6 +188,14 @@ def main() -> int:
     print(f"\n    unpaired se would have been "
           f"{(st.stdev(a)**2 / len(a) + st.stdev(b)**2 / len(b)) ** 0.5:.0f}"
           " — pairing is worth having only when it is smaller than that")
+    # Whichever arm ran second, did it lose? The alternation cancels this in
+    # the mean but not in the variance, so it is worth seeing.
+    second = [a_ - b_ if first[i] == "B" else b_ - a_
+              for i, (a_, b_) in enumerate(pairs)]
+    print(f"    position effect: the arm that ran second scored "
+          f"{st.mean(second):+.0f} on average"
+          + ("   <- large enough to be inflating the error bar above"
+             if abs(st.mean(second)) > se else ""))
     if abs(st.mean(diffs)) < 2 * se:
         print("    -> inside twice the standard error: no effect demonstrated")
     return 0
