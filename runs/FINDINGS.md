@@ -14,6 +14,7 @@ non-results in this project were briefly mistaken for signals.
 | DQN from scratch, original architecture | 1455 | 79 | 16 | 173 |
 | cloned into the original (dense) head | 1530 | 68 | 25 | 186 |
 | **cloned into the column head** | **2449** | 72 | 45 | 251 |
+| cloned from the 3158 rollout teacher | 2644 | 79 | 40 | 273 |
 | cloned + anchored RL fine-tuning | 2420 | 45 | 98 | 254 |
 | `greedy` hand-written policy | 2497 | 64 | 42 | 268 |
 | `layered`, before the `order` term | 2582 | 82 | 30 | 251 |
@@ -445,6 +446,45 @@ Anything worth under ~200 points is effectively unmeasurable in an afternoon on
 this machine. That, not the optimiser and not the policy class, is what limits
 the rate this project can learn anything — and it is why the right move is to
 chase changes large enough to see rather than to tune.
+
+### 11. A better teacher is worth much less than it looks
+
+The hand-written policy improved from 2582 to 3158. Re-collecting
+demonstrations from it and cloning again, with the same architecture and a
+comparable number of boards (21,897 against 24,703), moved the network from
+2449 to **2644 +/- 79** — a paired-free difference of **+195 +/- 107**, z = 1.82,
+p = 0.068. A 22% better teacher bought an 8% better clone, and not even that
+resolvably.
+
+The ratio is the finding. The old clone reached **95%** of its teacher; this one
+reaches **84%** of its. The absolute gap grew from 133 points to 514.
+
+`collect_demos.py` had to be taught to demonstrate from the rollout policy at
+all — it took `argmax(score_all(...))`, the closed-form teacher, which is a
+different and worse policy. And because `pretrain.py` fits the whole 40-column
+vector rather than the action, the *vector* had to carry the rollout teacher's
+preferences. Its own numbers could not be spliced in: `score_board` values a
+settled board and `score_candidate` values a placement, on unrelated scales,
+with only K of 40 columns having a board value at all. So the closed-form scale
+is kept and only the order changes — among the shortlisted columns the scores
+are reassigned so the one the simulation liked best gets the largest.
+
+Why it transfers so poorly is visible before the policy is ever run. Training
+loss settled at 0.185 against a validation loss of 0.270, and exact-column
+agreement on holdout was 13.2%. The closed-form teacher is a deterministic
+function of the visible board, which a convolutional network can fit. The
+rollout teacher reorders its top five candidates by what the physics engine
+says happens next, and **the network cannot see that**. It is asked to infer a
+simulated future from a static board, and it largely cannot.
+
+The consequence for the project: chasing a better demonstrator has sharply
+diminishing returns here. The closed-form component of the teacher transfers,
+the simulation component mostly does not, and no improvement to the teacher
+puts information into the demonstrations that the network has any way to
+extract. Giving the network afterstates to score, rather than asking it to
+predict what scoring them would have said, is the structural answer — and the
+afterstate attempt that failed at 1794 did so for reasons since diagnosed
+(geometric boards rather than simulated ones) and with no `order` term.
 
 ## What would plausibly move it
 
