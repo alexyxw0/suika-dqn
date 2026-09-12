@@ -16,11 +16,28 @@ non-results in this project were briefly mistaken for signals.
 | **cloned into the column head** | **2449** | 72 | 45 | 251 |
 | cloned + anchored RL fine-tuning | 2420 | 45 | 98 | 254 |
 | `greedy` hand-written policy | 2497 | 64 | 42 | 268 |
-| **`layered` hand-written policy** | **2696** | 68 | 62 | 285 |
+| `layered`, before the `order` term | 2582 | 82 | 30 | 251 |
+| `layered` hand-written policy | 2835 | 88 | 20 | 283 |
+| **`layered` + rollout 5** | **3100** | **48** | **100** | 307 |
+
+The best policy is hand-written: 3100 over 100 episodes, with a 95% interval of
+3005 to 3195. Against a target of 3000 that is z = 2.06, one-sided p = 0.020 —
+it clears the mark by five points at the lower bound, which is a pass and not a
+comfortable one. 61 of the 100 games scored above 3000.
+
+That measurement is deliberately the most expensive in this document. At 20
+episodes the standard error is about 95, and ten equally good variants tried at
+that sample size give roughly a one-in-five chance that one of them reads 3000+
+on luck alone. 100 episodes buys a standard error of 48, which is the precision
+the question needs: a policy truly at 3000 clears it half the time at any
+sample size, and it takes a true mean near 3070 to clear it reliably at this
+one. It was run once, on seeds nothing else had used, and reported whatever it
+said.
 
 The learned agent went from indistinguishable-from-random to 2449, roughly 1.7x
-the random floor. It is still below the hand-written policy it learned from,
-and nothing tried here closed that gap.
+the random floor. It remains below the hand-written policy it learned from, and
+the gap widened rather than closed when the teacher improved — the cloned
+network has not been retrained since the `order` term existed.
 
 ## The findings, in the order they were established
 

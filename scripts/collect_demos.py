@@ -33,8 +33,41 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import envpath                                                     # noqa: E402
 envpath.ensure()
 
-from heuristic import (POLICIES, READ_STATE, WEIGHT_NAMES,        # noqa: E402
-                       score_all)
+from heuristic import (BOARD_W, BOARD_WEIGHTS, POLICIES,          # noqa: E402
+                       READ_STATE, WEIGHT_NAMES, score_all, score_board)
+
+
+def rollout_targets(env, state, col_scores, weights, args):
+    """Fold the rollout teacher's ordering into the closed-form score vector.
+
+    The supervision target is the whole 40-column vector, so cloning the
+    rollout teacher means the *vector* has to express its preferences, not
+    just the action it took. Its own numbers cannot be used directly:
+    `score_board` values a settled board and `score_candidate` values a
+    placement, on unrelated scales, and only K of the 40 columns have a board
+    value at all. Splicing them would hand the network a target with a
+    discontinuity at the shortlist boundary.
+
+    So the scale stays the closed-form one and only the *order* changes. Among
+    the K shortlisted columns the closed-form scores are reassigned so the
+    column the simulation liked best gets the largest of them, second-best the
+    second largest, and so on; the other 35 keep their values. Same dense
+    signal, saying which columns are comparably good, with the ordering
+    corrected exactly where the physics disagreed with the estimate — which is
+    the only place it ever does.
+    """
+    order = [int(i) for i in np.argsort(-col_scores)[:args.rollout]]
+    xs = [float(int((i / (args.actions - 1)) * BOARD_W)) for i in order]
+    results = env.driver.execute_script(
+        "return Game.rollout(arguments[0], arguments[1]);", xs, state["cur"])
+    values = [score_board(r, BOARD_WEIGHTS) for r in results]
+
+    out = col_scores.copy()
+    pool = sorted((col_scores[i] for i in order), reverse=True)
+    by_sim = [order[i] for i in np.argsort(-np.asarray(values))]
+    for column, score in zip(by_sim, pool):
+        out[column] = score
+    return out, by_sim[0]
 
 
 def main() -> int:
@@ -50,6 +83,12 @@ def main() -> int:
                          "and a hang costs the client's full 120 s read "
                          "timeout before recovery can even start")
     ap.add_argument("--out", type=Path, default=Path("runs/demos.npz"))
+    ap.add_argument("--rollout", type=int, default=0, metavar="K",
+                    help="demonstrate with the rollout teacher: simulate the "
+                         "top K closed-form candidates and choose on the "
+                         "settled board. Without this the demonstrations come "
+                         "from the closed-form policy, whatever the rollout "
+                         "one scores")
     ap.add_argument("--policy", choices=sorted(POLICIES), default="layered",
                     help="layered scored 2771 against greedy's 2497 over 42 "
                          "episodes each (p=0.011); it is the better teacher")
@@ -90,7 +129,11 @@ def main() -> int:
                 while steps < args.max_steps:
                     state = env.driver.execute_script(READ_STATE)
                     col_scores = score_all(state, args.actions, weights)
-                    action = int(np.argmax(col_scores))
+                    if args.rollout:
+                        col_scores, action = rollout_targets(
+                            env, state, col_scores, weights, args)
+                    else:
+                        action = int(np.argmax(col_scores))
 
                     g.append(np.asarray(obs["grid"], dtype=np.float16))
                     v.append(np.asarray(obs["vector"], dtype=np.float16))

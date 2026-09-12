@@ -83,13 +83,18 @@ def main() -> int:
     ap.add_argument("--port", type=int, default=8997)
     ap.add_argument("--seed-base", type=int, default=70000)
     ap.add_argument("--fresh-browser", action="store_true",
-                    help="reopen the browser between the two arms of a seed, "
-                         "not just between seeds. Costs ~20s a switch and "
-                         "removes anything the first arm leaves behind — the "
-                         "scratch physics engine is reused across rollouts by "
-                         "design, so under --rollout the first arm pushes "
-                         "thousands of simulated drops through it before the "
-                         "second arm starts")
+                    help="reopen the browser between the two arms of a seed. "
+                         "Thorough but fragile: restart_env can block "
+                         "indefinitely on an unresponsive browser, and did — "
+                         "one run sat for three hours on a single restart. "
+                         "Prefer --fresh-sim, which targets the same state "
+                         "without the restart")
+    ap.add_argument("--fresh-sim", action="store_true", default=True,
+                    help="drop the scratch physics world between arms, so the "
+                         "second arm does not inherit an engine the first has "
+                         "pushed thousands of simulated drops through. One "
+                         "script call, no restart. On by default")
+    ap.add_argument("--no-fresh-sim", dest="fresh_sim", action="store_false")
     ap.add_argument("--null", action="store_true",
                     help="a control: run arm A's weights in BOTH positions. "
                          "Any difference it reports is the harness's own bias, "
@@ -139,8 +144,17 @@ def main() -> int:
                     [("B", wb, bb), ("A", wa, ba)]
             got = {}
             for position, (label, w, board) in enumerate(order):
-                if args.fresh_browser and position:
+                if position and args.fresh_browser:
                     env = restart_env(env, make_env)
+                elif position and args.fresh_sim:
+                    # Game.rollout builds the scratch world once and reuses it
+                    # — that was the fix for an engine leak. Dropping the
+                    # handle makes the next rollout build a clean one, which
+                    # is the whole of what the browser restart was for.
+                    try:
+                        env.driver.execute_script("Game._sim = null;")
+                    except Exception:                      # noqa: BLE001
+                        pass
                 for attempt in range(2):
                     try:
                         got[label] = play(env, w, seed, args, board)
