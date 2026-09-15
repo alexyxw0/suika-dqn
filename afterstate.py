@@ -54,6 +54,26 @@ def rasterise(fruits, grid_w=20, grid_h=30):
     return grid
 
 
+def size_gradient(fruits):
+    """How strongly size trends across the board, as |correlation| in [0, 1].
+
+    The same quantity `heuristic.size_gradient` scores, handed to the network
+    directly instead of left for it to find. It is worth doing that for this
+    one feature in particular: measured as a scoring term it was the largest
+    single gain in the project (+426 +/- 120), and it is a *global* property of
+    the board — a correlation across every fruit — which is the shape of thing
+    a convolution over a 20x30 raster is least suited to recovering. Absolute
+    value because either end may be the big end.
+    """
+    if len(fruits) < 4:
+        return 0.0
+    xs = np.array([f[0] for f in fruits], dtype=np.float64)
+    sizes = np.array([f[3] for f in fruits], dtype=np.float64)
+    if xs.std() < 1e-9 or sizes.std() < 1e-9:
+        return 0.0
+    return float(abs(np.corrcoef(xs, sizes)[0, 1]))
+
+
 def summarise(fruits, upcoming, grid_h=30):
     """The flat part of the observation: what is on the board and what is next.
 
@@ -72,7 +92,8 @@ def summarise(fruits, upcoming, grid_h=30):
         [(cur + 1) / N_SIZES,
          (nxt + 1) / N_SIZES,
          1.0 - min(top, grid_h) / grid_h,
-         min(len(fruits), LIVE_CAP) / LIVE_CAP],
+         min(len(fruits), LIVE_CAP) / LIVE_CAP,
+         size_gradient(fruits)],
     ]).astype(np.float32)
 
 

@@ -15,6 +15,7 @@ non-results in this project were briefly mistaken for signals.
 | cloned into the original (dense) head | 1530 | 68 | 25 | 186 |
 | **cloned into the column head** | **2449** | 72 | 45 | 251 |
 | cloned from the 3158 rollout teacher | 2644 | 79 | 40 | 273 |
+| afterstate ensemble, order feature | 2618 | 78 | 30 | 270 |
 | cloned + anchored RL fine-tuning | 2420 | 45 | 98 | 254 |
 | `greedy` hand-written policy | 2497 | 64 | 42 | 268 |
 | `layered`, before the `order` term | 2582 | 82 | 30 | 251 |
@@ -485,6 +486,64 @@ extract. Giving the network afterstates to score, rather than asking it to
 predict what scoring them would have said, is the structural answer — and the
 afterstate attempt that failed at 1794 did so for reasons since diagnosed
 (geometric boards rather than simulated ones) and with no `order` term.
+
+### 12. Every learned method lands at ~2600, and they share one thing
+
+The afterstate route was retried with everything the diagnosis of its first
+failure called for. The behaviour policy scored 2977 rather than ~2800;
+epsilon-greedy at 0.25 put near-miss boards in the training set rather than only
+the trajectory taken; and the size gradient — the largest measured gain in the
+project — was handed to the network as a 16th input feature instead of left to
+be recovered from a 20x30 raster.
+
+It scored **2618 +/- 78** over 30 episodes, at beta = 1 on the same top-5
+shortlist as before.
+
+| against | difference | p |
+|---|---|---|
+| the previous ensemble (2666) | -48 +/- 164 | 0.77 |
+| the cloned network (2644) | -26 +/- 111 | 0.81 |
+| its own behaviour policy (3100) | **-482 +/- 92** | **<0.001** |
+
+Unchanged. And the explanation offered for the 1794 failure — that the network
+was trained on the one afterstate taken per step and then asked to rank forty —
+does not survive: the distribution was fixed and nothing moved. The holdout fit
+was fine both times (r 0.856 now against 0.837 then, MAE 115 against 115), which
+was always the warning: fitting the return along a trajectory says little about
+ordering forty boards never seen.
+
+The result that matters is where everything has landed.
+
+| method | mean | se |
+|---|---|---|
+| cloned Q-network, 3158 teacher | 2644 | 79 |
+| cloned + anchored RL fine-tuning | 2420 | 45 |
+| afterstate ensemble, better data and feature | 2618 | 78 |
+
+Q-learning and Monte-Carlo value estimation; action-values and board-values;
+imitation and bootstrapping; a teacher worth 2582 and one worth 3158 — all
+within noise of 2600, while the hand-written policy sits at 3100. Four
+approaches converging on one number is not four independent failures.
+
+What they share is the observation, and the arithmetic is unkind:
+
+    grid 20x30 over 640x960      ->  32x32 px per cell
+    smallest fruit, diameter 48 px   =  1.5 cells
+    two size-0 fruits merge when their centres are within 48 px = 1.5 cells
+
+**Whether two small fruit touch is a sub-cell distinction.** It is also the
+single fact the game turns on. The hand-written policy reads exact float
+positions out of the physics engine and computes `landing_y` and `contacts` to
+the pixel; every network here is handed a raster that cannot represent the
+difference between merging and two pixels apart, and is then asked to rank
+forty placements that differ by 16.4 px — half a cell.
+
+This is a hypothesis, not a demonstrated cause. It is the first one that
+accounts for all four results at once rather than each separately, and it is
+cheap to test: give a network exact fruit coordinates instead of a raster and
+see whether the ceiling moves. Until that is run, the honest summary of this
+project is that the hand-written policy reads the state and the learned ones
+read a photograph of it.
 
 ## What would plausibly move it
 
