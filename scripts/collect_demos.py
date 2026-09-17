@@ -34,7 +34,8 @@ import envpath                                                     # noqa: E402
 envpath.ensure()
 
 from heuristic import (BOARD_W, BOARD_WEIGHTS, POLICIES,          # noqa: E402
-                       READ_STATE, WEIGHT_NAMES, score_all, score_board)
+                       READ_STATE, WEIGHT_NAMES, ranked, score_all,
+                       score_board)
 
 
 def rollout_targets(env, state, col_scores, weights, args):
@@ -56,7 +57,7 @@ def rollout_targets(env, state, col_scores, weights, args):
     corrected exactly where the physics disagreed with the estimate — which is
     the only place it ever does.
     """
-    order = [int(i) for i in np.argsort(-col_scores)[:args.rollout]]
+    order = [int(i) for i in ranked(col_scores)[:args.rollout]]
     xs = [float(int((i / (args.actions - 1)) * BOARD_W)) for i in order]
     results = env.driver.execute_script(
         "return Game.rollout(arguments[0], arguments[1]);", xs, state["cur"])
@@ -67,6 +68,16 @@ def rollout_targets(env, state, col_scores, weights, args):
     by_sim = [order[i] for i in np.argsort(-np.asarray(values))]
     for column, score in zip(by_sim, pool):
         out[column] = score
+
+    # argsort and argmax both break ties by lowest index, so on a board where
+    # several columns score identically the permutation above is a no-op and
+    # the target's argmax lands on whichever column came first rather than on
+    # the one the simulation chose. Then the demonstration says one thing and
+    # its target says another. Nudge the chosen column clear, by a thousandth
+    # of the board's own spread, and only when it would otherwise not win.
+    rest = np.delete(out, by_sim[0])
+    if len(rest) and out[by_sim[0]] <= rest.max():
+        out[by_sim[0]] = rest.max() + max(float(out.std()), 1.0) * 1e-3
     return out, by_sim[0]
 
 
@@ -83,6 +94,13 @@ def main() -> int:
                          "and a hang costs the client's full 120 s read "
                          "timeout before recovery can even start")
     ap.add_argument("--out", type=Path, default=Path("runs/demos.npz"))
+    ap.add_argument("--grid-w", type=int, default=20,
+                    help="observation grid width. The default of 20 against "
+                         "40 actions puts two adjacent drop positions in the "
+                         "same grid column, where they receive identical "
+                         "spatial input; 40 gives each action its own")
+    ap.add_argument("--max-fruits", type=int, default=48,
+                    help="fruit rows stored per board, zero-padded")
     ap.add_argument("--rollout", type=int, default=0, metavar="K",
                     help="demonstrate with the rollout teacher: simulate the "
                          "top K closed-form candidates and choose on the "
@@ -109,11 +127,16 @@ def main() -> int:
 
     def make_env():
         return SuikaBrowserEnv(headless=True, port=args.port,
-                               obs_mode="features")
+                               obs_mode="features", grid_w=args.grid_w)
 
     browser_dead = browser_failures()
     env = make_env()
     grids, vectors, actions, scores, qscores = [], [], [], [], []
+    # The exact board beside the rasterised one. Four floats a fruit costs
+    # almost nothing and makes every question about the input representation
+    # answerable offline: a finer grid, exact coordinates, hand-computed
+    # geometry. Without it each of those needs its own two-hour collection.
+    fruit_rows = []
     crashes = 0
     ep = 0
     attempts = 0
@@ -121,7 +144,7 @@ def main() -> int:
         while ep < args.episodes:
             # Only kept if the episode finishes, so a crash cannot contribute a
             # truncated tail that looks like a game ending early.
-            g, v, a, q = [], [], [], []
+            g, v, a, q, fr = [], [], [], [], []
             score, steps = 0.0, 0
             try:
                 obs, _ = env.reset()
@@ -133,10 +156,15 @@ def main() -> int:
                         col_scores, action = rollout_targets(
                             env, state, col_scores, weights, args)
                     else:
-                        action = int(np.argmax(col_scores))
+                        action = int(ranked(col_scores)[0])
 
                     g.append(np.asarray(obs["grid"], dtype=np.float16))
                     v.append(np.asarray(obs["vector"], dtype=np.float16))
+                    board = np.zeros((args.max_fruits, 4), dtype=np.float32)
+                    rows = state["fruits"][:args.max_fruits]
+                    if rows:
+                        board[:len(rows)] = np.asarray(rows, dtype=np.float32)
+                    fr.append(board.astype(np.float16))
                     a.append(action)
                     # The whole score vector, not just its argmax: forty
                     # supervised numbers a board instead of one, and it says
@@ -167,6 +195,7 @@ def main() -> int:
             vectors.extend(v)
             actions.extend(a)
             qscores.extend(q)
+            fruit_rows.extend(fr)
             scores.append(score)
             print(f"  episode {ep:>3}  score {score:>7.0f}  steps {steps:>4}"
                   f"  samples {len(grids):>6}  ({time.time() - started:.0f}s)",
@@ -191,6 +220,7 @@ def main() -> int:
         vector=np.asarray(vectors, dtype=np.float16),
         action=np.asarray(actions, dtype=np.int16),
         scores=np.asarray(qscores, dtype=np.float32),
+        fruits=np.asarray(fruit_rows, dtype=np.float16),
         episode_scores=np.asarray(scores, dtype=np.float32))
     mb = args.out.stat().st_size / 1e6
     print(f"\n  {len(grids)} samples from {len(scores)} episodes -> "

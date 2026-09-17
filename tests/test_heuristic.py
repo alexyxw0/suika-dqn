@@ -18,8 +18,8 @@ import numpy as np
 from heuristic import (BOARD_W, BOARD_WEIGHTS, DANGER_BAND, DROPPABLE,
                        FLOOR_Y, LOSE_Y, POLICIES, RADII, buried_small, choose,
                        contacts, landing_y, ready_pairs, score_all,
-                       score_board, score_candidate, size_gradient,
-                       trapped_indices, trapped_small)
+                       ranked, score_board, score_candidate,
+                       size_gradient, trapped_indices, trapped_small)
 
 WEIGHTS = {"merge": 30.0, "chain": 60.0, "chain_vert": 0.0, "bury": -8.0,
            "stack": 0.0, "trap": 0.0}
@@ -144,7 +144,11 @@ class TestScoreAll:
         floor = FLOOR_Y - 64
         state = {"fruits": [(300, floor, 64, 4), (500, floor, 40, 2)], "cur": 4}
         scores = score_all(state, 40, WEIGHTS)
-        assert int(scores.argmax()) == choose(state, 40, WEIGHTS)
+        # Not `argmax`: ties are broken at random now, so what must hold is
+        # that the chosen column attains the maximum, not that it is the
+        # lowest-indexed one that does.
+        picked = choose(state, 40, WEIGHTS)
+        assert scores[picked] == pytest.approx(scores.max())
 
     def test_near_equivalent_columns_score_near_equally(self):
         # The reason the whole vector is the better target: on an empty board
@@ -211,7 +215,7 @@ class TestStackAndTrap:
         board = [(100, FLOOR_Y - RADII[6], RADII[6], 6)]
         with_new, _ = score_candidate(100, 1, board, POLICIES["greedy"])
         legacy = {k: POLICIES["greedy"][k]
-                  for k in ("merge", "chain", "bury")}
+                  for k in ("merge", "chain", "low", "bury")}
         old_way, _ = score_candidate(100, 1, board, legacy)
         assert with_new == pytest.approx(old_way)
 
@@ -555,3 +559,37 @@ class TestOrderInScoreBoard:
         w = dict(BOARD_WEIGHTS)
         assert score_board(self._result(self.SORTED, lost=True), w) < \
                score_board(self._result(self.JUMBLED), w)
+
+
+class TestTieBreaking:
+    """Ties were broken by lowest index, which on a sparse board means the left
+    wall — 16% of boards, and under --rollout the shortlist became the five
+    leftmost columns."""
+
+    def test_a_clear_winner_is_still_deterministic(self):
+        scores = np.array([1.0, 5.0, 2.0, 3.0])
+        assert {int(ranked(scores)[0]) for _ in range(50)} == {1}
+
+    def test_ties_do_not_always_go_to_the_lowest_index(self):
+        scores = np.zeros(40)
+        picks = {int(ranked(scores)[0]) for _ in range(200)}
+        assert len(picks) > 5, "tie broken deterministically"
+
+    def test_ties_are_spread_over_the_tied_columns_only(self):
+        scores = np.array([9.0, 9.0, 1.0, 9.0, 0.0])
+        picks = {int(ranked(scores)[0]) for _ in range(200)}
+        assert picks <= {0, 1, 3} and len(picks) == 3
+
+    def test_the_full_ordering_is_still_sorted(self):
+        scores = np.array([1.0, 5.0, 2.0, 5.0, 3.0])
+        for _ in range(20):
+            order = ranked(scores)
+            assert list(scores[order]) == sorted(scores, reverse=True)
+
+    def test_a_shortlist_of_tied_columns_is_not_five_adjacent_ones(self):
+        """What the rollout actually consumes: with everything tied, the five
+        candidates simulated should be spread, not columns 0-4."""
+        scores = np.zeros(40)
+        spread = [max(ranked(scores)[:5]) - min(ranked(scores)[:5])
+                  for _ in range(50)]
+        assert np.mean(spread) > 10

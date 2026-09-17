@@ -61,10 +61,14 @@ SCORES = [1, 3, 6, 10, 15, 21, 28, 36, 45, 55, 66]
 # FINDINGS.md attributes 63% of this policy's advantage over random to episode
 # length rather than points per drop. See finding 9 for what it cost.
 POLICIES = {
-    "greedy": dict(merge=250.0, chain=60.0, chain_vert=0.0, bury=-8.0,
-                   stack=0.0, trap=0.0, danger=0.0, order=0.0),
-    "layered": dict(merge=250.0, chain=60.0, chain_vert=0.6, bury=-8.0,
-                    stack=25.0, trap=-20.0, danger=-900.0, order=30.0),
+    # `greedy` keeps low=200: that is the policy runs/FINDINGS.md measured at
+    # 2497, and changing it would leave a reference number describing code
+    # that no longer exists.
+    "greedy": dict(merge=250.0, chain=60.0, chain_vert=0.0, low=200.0,
+                   bury=-8.0, stack=0.0, trap=0.0, danger=0.0, order=0.0),
+    "layered": dict(merge=250.0, chain=60.0, chain_vert=0.6, low=20.0,
+                    bury=-8.0, stack=25.0, trap=-20.0, danger=-900.0,
+                    order=30.0),
 }
 
 # Scoring a *settled* board rather than a placement. Only reachable with
@@ -73,8 +77,8 @@ POLICIES = {
 # it. `gained` is in game points; the rest are shaped to sit alongside them.
 BOARD_WEIGHTS = dict(gained=12.0, lost=-4000.0, top=-900.0, ready=25.0,
                      buried=-12.0, order=30.0)
-WEIGHT_NAMES = ("merge", "chain", "chain_vert", "bury", "stack", "trap",
-                "danger", "order")
+WEIGHT_NAMES = ("merge", "chain", "chain_vert", "low", "bury", "stack",
+                "trap", "danger", "order")
 
 # Reading the board is one script call; doing it per candidate would be 40.
 READ_STATE = """
@@ -208,6 +212,18 @@ def score_candidate(x, cur, fruits, weights):
                 best = max(best, 1.0 - w_cv * (1.0 - vertical))
             if best:
                 value += weights["chain"] * SCORES[cur + 1] * best
+
+    # Something has to order the columns when nothing else applies. On a
+    # sparse board no merge, chain, stack or trap fires and `danger` is flat
+    # until the pile nears the lose line, so every column scores identically —
+    # measured at 16% of boards — and argmax takes the lowest index, the left
+    # wall. Worse under --rollout, where the shortlist is then the five
+    # leftmost columns and the physics is only ever asked about the edge.
+    # This is the old `low` term at a tenth of its old weight: enough to order
+    # otherwise-equal columns, too small to outrank a merge.
+    w_low = weights.get("low", 0.0)
+    if w_low:
+        value += w_low * (y / FLOOR_Y)
 
     # Survival, priced the way it actually behaves. `low` used to be a reward
     # proportional to how low the fruit landed — linear across the whole board,
@@ -404,7 +420,7 @@ def choose_by_rollout(env, state, actions, weights, board_weights, top_k):
     decide the outcome. So the estimate shortlists and the physics decides.
     """
     est = score_all(state, actions, weights)
-    order = [int(i) for i in np.argsort(-est)[:top_k]]
+    order = [int(i) for i in ranked(est)[:top_k]]
     xs = [float(int((i / (actions - 1)) * BOARD_W)) for i in order]
     results = env.driver.execute_script(
         "return Game.rollout(arguments[0], arguments[1]);", xs, state["cur"])
@@ -435,8 +451,29 @@ def score_all(state, actions, weights):
     return out
 
 
-def choose(state, actions, weights):
-    return int(np.argmax(score_all(state, actions, weights)))
+def ranked(scores, rng=None):
+    """Column indices best-first, with ties broken at random.
+
+    `np.argsort` and `np.argmax` break ties by lowest index, which here means
+    the left wall: on 16% of boards every column scores identically — a sparse
+    board fires no merge, chain, stack or trap, `danger` is flat below its
+    band, and on a level floor every free column lands at the same height — and
+    the policy then drops at column 0 every time. Under --rollout it is worse,
+    because the shortlist becomes the five leftmost columns and the physics is
+    only ever consulted about the edge.
+
+    Breaking ties at random asserts nothing about where the fruit belongs. It
+    only stops a tie from being resolved by an implementation detail, and it
+    gives the rollout a spread of genuinely tied candidates to simulate rather
+    than five adjacent ones.
+    """
+    rng = rng if rng is not None else np.random
+    order = rng.permutation(len(scores))
+    return order[np.argsort(-np.asarray(scores)[order], kind="stable")]
+
+
+def choose(state, actions, weights, rng=None):
+    return int(ranked(score_all(state, actions, weights), rng)[0])
 
 
 def main() -> int:
