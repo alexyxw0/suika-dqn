@@ -61,14 +61,21 @@ SCORES = [1, 3, 6, 10, 15, 21, 28, 36, 45, 55, 66]
 # FINDINGS.md attributes 63% of this policy's advantage over random to episode
 # length rather than points per drop. See finding 9 for what it cost.
 POLICIES = {
-    # `greedy` keeps low=200: that is the policy runs/FINDINGS.md measured at
-    # 2497, and changing it would leave a reference number describing code
-    # that no longer exists.
+    # `greedy` is a reference, not a deployed policy: it keeps low=200 and
+    # index tie-breaking because that is the code runs/FINDINGS.md measured at
+    # 2497. Changing it would leave a number describing something that no
+    # longer exists.
     "greedy": dict(merge=250.0, chain=60.0, chain_vert=0.0, low=200.0,
-                   bury=-8.0, stack=0.0, trap=0.0, danger=0.0, order=0.0),
-    "layered": dict(merge=250.0, chain=60.0, chain_vert=0.6, low=20.0,
+                   bury=-8.0, stack=0.0, trap=0.0, danger=0.0, order=0.0,
+                   tiebreak=0.0),
+    # `low` is 0 deliberately, and it is not simply inert. Measured against
+    # low=0 over 16 paired seeds it cost -269 +/- 142 (p 0.058, losing 11 of
+    # 16). It rewards landing low, which flattens the pile, while `order`
+    # rewards gathering big fruit at one end, which builds a tall side: the
+    # two pull against each other and `order` is worth far more.
+    "layered": dict(merge=250.0, chain=60.0, chain_vert=0.6, low=0.0,
                     bury=-8.0, stack=25.0, trap=-20.0, danger=-900.0,
-                    order=30.0),
+                    order=30.0, tiebreak=1.0),
 }
 
 # Scoring a *settled* board rather than a placement. Only reachable with
@@ -78,7 +85,7 @@ POLICIES = {
 BOARD_WEIGHTS = dict(gained=12.0, lost=-4000.0, top=-900.0, ready=25.0,
                      buried=-12.0, order=30.0)
 WEIGHT_NAMES = ("merge", "chain", "chain_vert", "low", "bury", "stack",
-                "trap", "danger", "order")
+                "trap", "danger", "order", "tiebreak")
 
 # Reading the board is one script call; doing it per candidate would be 40.
 READ_STATE = """
@@ -420,7 +427,8 @@ def choose_by_rollout(env, state, actions, weights, board_weights, top_k):
     decide the outcome. So the estimate shortlists and the physics decides.
     """
     est = score_all(state, actions, weights)
-    order = [int(i) for i in ranked(est)[:top_k]]
+    order = [int(i) for i in
+             ranked(est, None, weights.get("tiebreak", 1.0) > 0)[:top_k]]
     xs = [float(int((i / (actions - 1)) * BOARD_W)) for i in order]
     results = env.driver.execute_script(
         "return Game.rollout(arguments[0], arguments[1]);", xs, state["cur"])
@@ -451,7 +459,7 @@ def score_all(state, actions, weights):
     return out
 
 
-def ranked(scores, rng=None):
+def ranked(scores, rng=None, random_ties=True):
     """Column indices best-first, with ties broken at random.
 
     `np.argsort` and `np.argmax` break ties by lowest index, which here means
@@ -467,13 +475,17 @@ def ranked(scores, rng=None):
     gives the rollout a spread of genuinely tied candidates to simulate rather
     than five adjacent ones.
     """
+    scores = np.asarray(scores)
+    if not random_ties:
+        return np.argsort(-scores, kind="stable")
     rng = rng if rng is not None else np.random
     order = rng.permutation(len(scores))
-    return order[np.argsort(-np.asarray(scores)[order], kind="stable")]
+    return order[np.argsort(-scores[order], kind="stable")]
 
 
 def choose(state, actions, weights, rng=None):
-    return int(ranked(score_all(state, actions, weights), rng)[0])
+    scores = score_all(state, actions, weights)
+    return int(ranked(scores, rng, weights.get("tiebreak", 1.0) > 0)[0])
 
 
 def main() -> int:
