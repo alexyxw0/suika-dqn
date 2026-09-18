@@ -4,3 +4,14 @@ registering suika env
     seed 555001  tab crashed, replaying the pair
     seed 555001  tab crashed, replaying the pair
     seed 555001  tab crashed, replaying the pair
+    seed 555002    3199/314     3199/314   MATCH
+    seed 555003    2598/284     2598/284   MATCH
+    seed 555004    2245/240     2245/240   MATCH
+    seed 555005    3303/334     3303/334   MATCH
+
+  5/5 episodes reproduced exactly
+    paired-difference sd        0      (null control, wall clock: 1068)
+    same-seed correlation    +1.00      (null control, wall clock: -0.29)
+
+  Seeds reproduce. Pairing on them now removes the fruit
+  sequence, which is about half the variance in this game.

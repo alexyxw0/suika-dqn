@@ -433,9 +433,33 @@ to two *different* policies diverging; in fact **a policy diverges from itself**
 Measured correlation between arms on the same seed: **+0.32**, cutting the
 difference sd from 710 to only 588.
 
-The fix is to make the wait deterministic — settle on a physics tick count
-rather than a wall-clock budget — which would make seeds reproduce and sharpen
-every paired comparison in this document. Not yet done.
+**Fixed, and it was the wall clock.** `?ticks=1` stops `runFastPhysics` — the
+loop paced by `requestAnimationFrame` — from ever starting, and `Game.advance()`
+becomes the only thing that steps the world, counted in ticks. Replaying five
+seeds with a deterministic policy:
+
+| | before | after |
+|---|---|---|
+| episodes reproduced exactly | 0 of 4 | **5 of 5** |
+| paired-difference sd | 1068 | **0** |
+| same-seed correlation | -0.29 | **+1.00** |
+
+It is also faster: 94 ticks a drop on average and about 12 ms of wall time,
+against a poll that could wait up to 1000 ms. Both of the things that made
+measurement here expensive were the same bug.
+
+One seed, 555001, now crashes the tab on every attempt. Before this, tab
+crashes struck about 14% of episodes at random; a reproducible one is a much
+easier thing to diagnose, and at 15 crashes per 100 episodes it is a standing
+tax on every measurement.
+
+**What this invalidates about the numbers above.** Nothing is wrong, but the
+error bars on every paired comparison in this document were paying for
+variance that no longer exists. The null control priced a 200-point comparison
+at 114 paired seeds and a 100-point one at 456; both figures were driven by the
+1068, and both should now fall sharply. Three results left unresolved —
+`order` in the rollout path (+280 +/- 184), the tie-break (-129 +/- 281), and
+`danger` (+330 +/- 167) — are worth re-measuring rather than re-arguing.
 
 | effect to resolve | paired seeds | episodes | wall clock |
 |---|---|---|---|
@@ -447,6 +471,31 @@ Anything worth under ~200 points is effectively unmeasurable in an afternoon on
 this machine. That, not the optimiser and not the policy class, is what limits
 the rate this project can learn anything — and it is why the right move is to
 chase changes large enough to see rather than to tune.
+
+### 10b. The position artifact was my error, not the harness's
+
+Six A/B runs were checked for an advantage to whichever arm ran first. One
+returned +376 +/- 150 (p = 0.012), and it was treated as an established
+mechanism: a story about `Game._sim` accumulating state across ~1,500 simulated
+drops, a run spent testing that story, a three-hour hang chasing a fix for it,
+and a measured result — `order` in the rollout path, +280 +/- 184 — dismissed
+as contaminated.
+
+It was noise. One result at p = 0.012 out of six tested is about what chance
+delivers, and the two rollout runs were further from each other (+788 +/- 300,
+p = 0.009) than either was from zero. The null control settled it: the same
+policy in both arms, 20 seeds, no position effect within 1.2 standard errors —
+
+    label A minus label B   -248 +/- 239   p 0.298
+    second minus first      +285 +/- 237   p 0.229
+
+What the null did find was worse than what it was looking for, and is written
+up as finding 10: two runs of one policy on one seed correlating at -0.29.
+
+The lesson is procedural. `--null` existed before any of this; it was built and
+then not used, and six rollout comparisons were run without ever measuring the
+harness's own noise floor. A control is worth most before the experiments, not
+after them.
 
 ### 11. A better teacher is worth much less than it looks
 
