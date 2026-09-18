@@ -1,8 +1,8 @@
 diff --git a/suika_env/suika-game/index.js b/suika_env/suika-game/index.js
-index af39b2d..268567c 100644
+index af39b2d..e8e31e9 100644
 --- a/suika_env/suika-game/index.js
 +++ b/suika_env/suika-game/index.js
-@@ -8,12 +8,34 @@ function mulberry32(a) {
+@@ -8,12 +8,47 @@ function mulberry32(a) {
  		return ((t ^ t >>> 14) >>> 0) / 4294967296;
  	}
  }
@@ -20,6 +20,19 @@ index af39b2d..268567c 100644
 +
 +	loop();
 +}
++
++// Physics on a wall clock is not reproducible, and measured, it is not even
++// close. Two runs of the same policy on the same seed correlate at -0.29 and
++// their paired difference has a standard deviation of 1068 — as unrelated as
++// two different games. The cause is this loop: it is paced by
++// requestAnimationFrame, so how many ticks elapse between a drop and the
++// observation depends on how busy the machine is, about 3% of drops are read
++// while still moving, and from there the games diverge.
++//
++// Under ?ticks=1 the loop never starts and `Game.advance` below is the only
++// thing that steps the world. The number of ticks between two observations is
++// then a function of the simulation alone, a seed reproduces a game, and
++// pairing on seeds removes the fruit-sequence variance it is supposed to.
 +
 +// A seed in the page URL makes an episode exactly reproducible. The fruit
 +// sequence is the only randomness this game has and Matter.js is
@@ -39,7 +52,7 @@ index af39b2d..268567c 100644
  } = Matter;
  
  const wallPad = 64;
-@@ -26,6 +48,11 @@ const friction = {
+@@ -26,6 +61,13 @@ const friction = {
  	restitution: 0.1
  };
  
@@ -47,11 +60,13 @@ index af39b2d..268567c 100644
 +const PAGE_FLAGS = new URLSearchParams(location.search);
 +const MUTE_AUDIO = PAGE_FLAGS.has('mute');
 +const ON_DEMAND_RENDER = PAGE_FLAGS.has('norender');
++// Physics stepped only when asked, so an episode is reproducible.
++const TICK_DRIVEN = PAGE_FLAGS.has('ticks');
 +
  const GameStates = {
  	MENU: 0,
  	READY: 1,
-@@ -47,7 +74,10 @@ const Game = {
+@@ -47,7 +89,10 @@ const Game = {
  		previewBall: null,
  	},
  	cache: { highscore: 0 },
@@ -63,7 +78,7 @@ index af39b2d..268567c 100644
  		click: new Audio('./assets/click.mp3'),
  		pop0: new Audio('./assets/pop0.mp3'),
  		pop1: new Audio('./assets/pop1.mp3'),
-@@ -120,9 +150,196 @@ const Game = {
+@@ -120,9 +165,224 @@ const Game = {
  		localStorage.setItem('suika-game-cache', JSON.stringify(Game.cache));
  	},
  
@@ -241,6 +256,34 @@ index af39b2d..268567c 100644
 +		return results;
 +	},
 +
++	// Whether physics is tick-driven, readable from outside. The const itself
++	// is a lexical global, which an injected script cannot see — only
++	// properties of objects on `window` are reachable from execute_script, and
++	// a caller that cannot tell which mode the page is in cannot check it.
++	tickDriven: TICK_DRIVEN,
++
++	// Step the world by hand until it stops moving, counting physics ticks
++	// rather than milliseconds. Returns how many it took, and whether it
++	// actually came to rest or hit the cap.
++	//
++	// The settle check is not run every tick: `settled` walks every body, and
++	// at ~30 bodies and a few hundred ticks a drop that is the dominant cost.
++	// Every fourth tick bounds the overshoot at three ticks of physics, which
++	// is below the resolution anything here cares about.
++	advance: function (maxTicks) {
++		if (!TICK_DRIVEN) return { ticks: 0, settled: Game.settled() };
++		const cap = maxTicks || 3000;
++		let ticks = 0;
++		while (ticks < cap) {
++			Engine.update(engine, 1000 / 60);
++			ticks++;
++			// Not before the drop has had time to leave the top: the board
++			// starts settled, so an immediate check returns at once.
++			if (ticks >= 12 && ticks % 4 === 0 && Game.settled()) break;
++		}
++		return { ticks: ticks, settled: ticks < cap };
++	},
++
 +	settled: function () {
 +		const bodies = Composite.allBodies(engine.world);
 +		for (const body of bodies) {
@@ -258,11 +301,11 @@ index af39b2d..268567c 100644
 +		// runs continuously — that is runFastPhysics below, a separate loop.
 +		if (ON_DEMAND_RENDER) Render.world(render);
 +		else Render.run(render);
-+		runFastPhysics();
++		if (!TICK_DRIVEN) runFastPhysics();
  
  		Composite.add(engine.world, menuStatics);
  
-@@ -298,7 +515,7 @@ const Game = {
+@@ -298,7 +558,7 @@ const Game = {
  				Composite.add(engine.world, Game.elements.previewBall);
  				Game.stateIndex = GameStates.READY;
  			}
@@ -272,10 +315,10 @@ index af39b2d..268567c 100644
  }
  
 diff --git a/suika_env/suika_browser_env.py b/suika_env/suika_browser_env.py
-index 97bbac6..eead1f0 100644
+index 97bbac6..56a027b 100644
 --- a/suika_env/suika_browser_env.py
 +++ b/suika_env/suika_browser_env.py
-@@ -2,18 +2,24 @@ from selenium import webdriver
+@@ -2,18 +2,29 @@ from selenium import webdriver
  from selenium.webdriver.common.by import By
  import time
  import gymnasium
@@ -300,11 +343,16 @@ index 97bbac6..eead1f0 100644
 +                 min_settle_seconds=0.02, next_fruit_strip=14,
 +                 obs_mode="pixels", grid_w=20, grid_h=30) -> None:
 +        # Flags the page reads: no audio, and repaint only when asked.
-+        self.game_url = f"http://localhost:{port}/?mute=1&norender=1"
++        # ticks=1: the page steps physics only when asked, so an episode is
++        # reproducible from its seed. Without it the free-running loop is
++        # paced by requestAnimationFrame and two runs of one policy on one
++        # seed are as unrelated as two different games (correlation -0.29).
++        self.game_url = (f"http://localhost:{port}/"
++                         f"?mute=1&norender=1&ticks=1")
          # Check if port is already in use
          self.server = None
          if not self.is_port_in_use(port):
-@@ -21,79 +27,262 @@ class SuikaBrowserEnv(gymnasium.Env):
+@@ -21,79 +32,267 @@ class SuikaBrowserEnv(gymnasium.Env):
              script_dir = os.path.dirname(os.path.realpath(__file__))
              # Construct the absolute path of the suika-game directory
              suika_game_dir = os.path.join(script_dir, 'suika-game')
@@ -362,6 +410,11 @@ index 97bbac6..eead1f0 100644
 +        if obs_mode not in ("pixels", "features"):
 +            raise ValueError(f"obs_mode must be 'pixels' or 'features', got {obs_mode!r}")
 +        self.obs_mode = obs_mode
++        # Cap on how far `Game.advance` will step a single drop. 3000 ticks is
++        # fifty seconds of game time; nothing that has not settled by then is
++        # going to.
++        self.max_settle_ticks = 3000
++        self._last_settle = None
 +        self.grid_w, self.grid_h = grid_w, grid_h
 +        self.n_sizes = 11          # Game.fruitSizes, radii 24..192
          self.img_width = 128
@@ -608,7 +661,7 @@ index 97bbac6..eead1f0 100644
          score = obs['score'].item()
          info['score'] = score
          reward += score - self.score
-@@ -101,6 +290,34 @@ class SuikaBrowserEnv(gymnasium.Env):
+@@ -101,6 +300,43 @@ class SuikaBrowserEnv(gymnasium.Env):
  
          return obs, reward, terminal, truncated, info
  
@@ -621,6 +674,15 @@ index 97bbac6..eead1f0 100644
 +        is still moving, which runs at the speed of the simulation rather than
 +        the clock, and returns as soon as the board is quiet.
 +        """
++        # Tick-driven: step the world until it stops, counted in physics
++        # ticks. One synchronous round trip, no clock anywhere in it.
++        result = self.driver.execute_script(
++            "return window.Game.advance ? window.Game.advance(arguments[0])"
++            "                           : null;", self.max_settle_ticks)
++        if result is not None:
++            self._last_settle = result
++            return
++
 +        # Waiting in the page costs one round trip instead of one per poll.
 +        # Polling from Python took ~14 calls for a typical drop; this takes 1.
 +        self.driver.execute_async_script(

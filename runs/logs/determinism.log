@@ -1,0 +1,6 @@
+registering suika env
+  url: http://localhost:8969/?mute=1&norender=1&ticks=1
+    seed 555000    2342/238     2342/238   MATCH
+    seed 555001  tab crashed, replaying the pair
+    seed 555001  tab crashed, replaying the pair
+    seed 555001  tab crashed, replaying the pair
